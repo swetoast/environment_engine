@@ -2,13 +2,19 @@
 
 Instead of a single "it warms at X °C/min" number, this fits the actual physics:
 
-    dT/dt = k*(T_out - T_in) + s*solar + c*cooling + b
+    dT/dt = k*(T_out - T_in) + s*solar + c*cooling + o*occupied + b
 
   k  -- envelope leakiness (how fast outdoor temperature bleeds in). 1/k is the room's
         thermal time constant tau, i.e. how sluggish it is.
   s  -- solar gain per unit of sun (from lux / sun elevation).
   c  -- the AC's effective cooling power (negative).
-  b  -- steady internal gain (people, electronics, standing heat).
+  o  -- the heat *you* add: bodies, cooking, screens. An empty home and an occupied one are
+        genuinely different thermal systems, so they get their own term rather than being
+        blurred into one average that is wrong in both states.
+  b  -- the standing internal gain that is there regardless (fridge, standby electronics).
+
+An empty house is the cleanest laboratory there is -- no doors, no cooking, no bodies -- so the
+model keeps learning while you are away rather than sleeping. It just needs to know you are out.
 
 The four coefficients are fitted online with recursive least squares (a forgetting
 factor keeps it adapting as seasons and furniture change). That makes the model
@@ -21,7 +27,7 @@ outdoor warmer/cooler) that is useful from the very first day.
 """
 from __future__ import annotations
 
-_N = 4                     # k, s, c, b
+_N = 5                     # k, s, c, o, b
 _FORGET = 0.997            # forgetting factor: adapt without thrashing
 _MAX_DT = 30.0             # minutes; longer gaps mean a restart/outage, not physics
 _WARMUP = 20               # clean samples before the model is trusted at all
@@ -32,6 +38,7 @@ _K_RANGE = (0.0, 0.05)     # per minute, per °C of indoor/outdoor difference
 _C_RANGE = (-0.5, 0.0)     # cooling can only cool
 _B_RANGE = (-0.2, 0.2)
 _S_RANGE = (0.0, 0.5)
+_O_RANGE = (0.0, 0.2)      # people add heat; they never chill a room
 
 
 def _clamp(value, low, high):
@@ -64,7 +71,7 @@ class BucketedRates:
 
 class ThermalModel:
     def __init__(self) -> None:
-        self.theta = [0.0] * _N                       # k, s, c, b
+        self.theta = [0.0] * _N                       # k, s, c, o, b
         self.p = [[1000.0 if i == j else 0.0 for j in range(_N)] for i in range(_N)]
         self.samples = 0
         self.rejected = 0
@@ -86,7 +93,8 @@ class ThermalModel:
             return False
         indoor, outdoor = previous.indoor_temp, previous.outdoor_temp
         rate = (current.indoor_temp - indoor) / dt_minutes           # °C per minute
-        x = [outdoor - indoor, solar, 1.0 if cooling else 0.0, 1.0]
+        occupied = 1.0 if getattr(previous, "occupancy", False) else 0.0
+        x = [outdoor - indoor, solar, 1.0 if cooling else 0.0, occupied, 1.0]
         self._rls(x, rate)
         self.samples += 1
         # Context bucket (works from day one, and is the fallback while the model warms up).
@@ -113,6 +121,8 @@ class ThermalModel:
             return False                                   # mode flipped mid-interval
         if abs(current.indoor_temp - previous.indoor_temp) > 5.0:
             return False                                   # sensor glitch, not a room
+        if getattr(previous, "occupancy", None) != getattr(current, "occupancy", None):
+            return False                                   # someone came or went mid-interval
         return True
 
     def _rls(self, x: list[float], y: float) -> None:
@@ -166,8 +176,13 @@ class ThermalModel:
         return _clamp(self.theta[2], *_C_RANGE)
 
     @property
+    def occupied_gain(self) -> float:
+        """Extra °C/min the room gains simply because someone is home."""
+        return _clamp(self.theta[3], *_O_RANGE)
+
+    @property
     def internal_gain(self) -> float:
-        return _clamp(self.theta[3], *_B_RANGE)
+        return _clamp(self.theta[4], *_B_RANGE)
 
     @property
     def time_constant(self) -> float | None:
@@ -207,7 +222,8 @@ class ThermalModel:
         return _clamp((self.effectiveness - 0.5) * 2.0 * cap * self.confidence, -cap, cap)
 
     # ---------- prediction ----------
-    def drift(self, indoor: float, outdoor: float, solar: float, cooling: bool = False) -> float:
+    def drift(self, indoor: float, outdoor: float, solar: float, cooling: bool = False,
+              occupied: bool = False) -> float:
         """Modelled dT/dt (°C per minute) under the given conditions, or 0.0 when the
         inputs aren't there to model with."""
         if indoor is None or outdoor is None:
@@ -215,10 +231,11 @@ class ThermalModel:
         return (self.leakiness * (outdoor - indoor)
                 + self.solar_gain * solar
                 + (self.cooling_power if cooling else 0.0)
+                + (self.occupied_gain if occupied else 0.0)
                 + self.internal_gain)
 
     def predict(self, indoor: float, outdoor, solar: float = 0.0, minutes: float = 30.0,
-                cooling: bool = False, step: float = 5.0) -> float | None:
+                cooling: bool = False, step: float = 5.0, occupied: bool = False) -> float | None:
         """Indoor temperature `minutes` from now if nothing changes. `outdoor` may be a
         number or a callable(elapsed_minutes) -> °C so a weather forecast can drive it.
         Integrates in short steps, so it curves toward the outdoor temperature the way a
@@ -231,12 +248,13 @@ class ThermalModel:
             out = outdoor(elapsed) if callable(outdoor) else outdoor
             if out is None:
                 return None
-            temperature += self.drift(temperature, out, solar, cooling) * span
+            temperature += self.drift(temperature, out, solar, cooling, occupied) * span
             elapsed += span
         return temperature
 
     def anticipation(self, indoor: float, outdoor, solar: float = 0.0, cap: float = 1.5,
-                     lookahead: float | None = None, sun_up: bool = True) -> float:
+                     lookahead: float | None = None, sun_up: bool = True,
+                     occupied: bool = False) -> float:
         """How much warmer the room will be over the lookahead if left alone -- the number
         that lets the AC lead a fast-warming room. The lookahead defaults to a fraction of
         the room's own time constant, so a sluggish room is anticipated further ahead than
@@ -253,7 +271,7 @@ class ThermalModel:
             lookahead = _clamp((tau or 60.0) * 0.25, 10.0, 45.0)
         confidence = self.confidence
         if confidence > 0.0:
-            future = self.predict(indoor, outdoor, solar, lookahead)
+            future = self.predict(indoor, outdoor, solar, lookahead, occupied=occupied)
             if future is not None:
                 return _clamp(future - indoor, 0.0, cap) * confidence
         # Fallback: what this room has actually done in these conditions before.
@@ -262,3 +280,42 @@ class ThermalModel:
         if self.buckets.samples(key) >= 5:
             return _clamp(self.buckets.rate(key) * lookahead, 0.0, cap)
         return 0.0
+
+
+    # ---------- persistence ----------
+    def as_dict(self) -> dict:
+        """The learned lessons -- coefficients, covariance, counters. About 30 numbers, and
+        the whole point of a recursive fit: no sample history is ever stored, so this never
+        grows. Persisting it means a restart doesn't throw away days of learning."""
+        return {
+            "theta": list(self.theta),
+            "p": [list(row) for row in self.p],
+            "samples": self.samples,
+            "rejected": self.rejected,
+            "residual_var": self._residual_var,
+            "buckets": {"rates": dict(self.buckets.rates), "counts": dict(self.buckets.counts)},
+            "cooling_effect": dict(self.cooling_effect),
+        }
+
+    def restore(self, data) -> bool:
+        """Reload a persisted fit. Anything malformed or from an older shape is ignored --
+        re-learning from scratch is always safe, so a bad restore must never be fatal."""
+        if not isinstance(data, dict):
+            return False
+        try:
+            theta = [float(v) for v in data["theta"]]
+            p = [[float(v) for v in row] for row in data["p"]]
+            if len(theta) != _N or len(p) != _N or any(len(row) != _N for row in p):
+                return False  # a model of a different shape (upgrade) -- start clean
+            self.theta = theta
+            self.p = p
+            self.samples = int(data.get("samples", 0))
+            self.rejected = int(data.get("rejected", 0))
+            self._residual_var = float(data.get("residual_var", 0.0))
+            buckets = data.get("buckets") or {}
+            self.buckets.rates = {str(k): float(v) for k, v in (buckets.get("rates") or {}).items()}
+            self.buckets.counts = {str(k): int(v) for k, v in (buckets.get("counts") or {}).items()}
+            self.cooling_effect = {str(k): float(v) for k, v in (data.get("cooling_effect") or {}).items()}
+            return True
+        except (KeyError, TypeError, ValueError):
+            return False

@@ -168,7 +168,7 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
         attrs["expected_warming_c"] = round(self.coordinator._anticipation(s), 1)
         # What the learned thermal model knows about this room.
         solar = self.coordinator._solar_proxy(s)
-        predicted = model.predict(s.indoor_temp, s.outdoor_temp, solar, minutes=30)
+        predicted = model.predict(s.indoor_temp, s.outdoor_temp, solar, minutes=30, occupied=bool(s.occupancy))
         if predicted is not None:
             attrs["predicted_in_30min_c"] = round(predicted, 1)
         tau = model.time_constant
@@ -179,6 +179,7 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
             attrs["heat_leaks_in_c_per_hour"] = round(model.leakiness * 60, 2)
             attrs["sun_adds_c_per_hour"] = round(model.solar_gain * 60, 2)
             attrs["ac_removes_c_per_hour"] = round(-model.cooling_power * 60, 2)
+            attrs["you_add_c_per_hour"] = round(model.occupied_gain * 60, 2)
         if model.struggling:
             attrs["struggling_to_cool"] = True
         if s.forecast_high is not None:

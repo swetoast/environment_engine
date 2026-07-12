@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from typing import Any
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from .adaptive_learning import AdaptiveLearning
@@ -41,6 +42,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hysteresis = HysteresisEngine()
         self.learning = AdaptiveLearning()
         self.thermal = ThermalModel()
+        self._model_store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.thermal")
         self._last_update_ts = None
         self.aq_memory = PeakDecay()
         self.seal_memory = PeakDecay()
@@ -81,7 +83,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _dt_min = (_now_ts - self._last_update_ts) / 60.0 if self._last_update_ts is not None else 0.0
         self._last_update_ts = _now_ts
         was_cooling = getattr(self.previous_decision, "hvac_mode", None) in (HVAC_COOL, HVAC_DRY)
-        self.thermal.update(self.previous_snapshot, snapshot, _dt_min, was_cooling, self._solar_proxy(self.previous_snapshot))
+        if self.thermal.update(self.previous_snapshot, snapshot, _dt_min, was_cooling, self._solar_proxy(self.previous_snapshot)):
+            self._save_model()
         memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp)
         evaluations = self._evaluate(snapshot, memory)
         raw_decision = Planner(self.capabilities, self.options).plan(snapshot, evaluations)
@@ -267,6 +270,22 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 best = max(best, heat_outlook(entries, dt_util.utcnow(), float(self.options.target), unit))
         return best
 
+    async def async_load_model(self) -> None:
+        """Reload what the room taught us last time. Days of learning shouldn't be thrown
+        away by a restart -- and it's only ~1 kB, because a recursive fit keeps the lessons,
+        never the samples."""
+        try:
+            stored = await self._model_store.async_load()
+        except Exception:  # a corrupt store must never block startup; re-learning is safe
+            _LOGGER.debug("Could not load the thermal model; starting fresh")
+            return
+        if stored and self.thermal.restore(stored):
+            _LOGGER.debug("Restored thermal model (%s samples)", self.thermal.samples)
+
+    def _save_model(self) -> None:
+        """Debounced write -- the coordinator runs every minute, the disk shouldn't."""
+        self._model_store.async_delay_save(self.thermal.as_dict, 300)
+
     @staticmethod
     def _solar_proxy(snapshot) -> float:
         """0..1 'how much sun is landing on this room' -- measured lux when there is a
@@ -285,6 +304,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.thermal.anticipation(
             snapshot.indoor_temp, snapshot.outdoor_temp,
             solar=self._solar_proxy(snapshot), sun_up=bool(snapshot.sun_up),
+            occupied=bool(snapshot.occupancy),
         )
 
     def _price_signals(self):
