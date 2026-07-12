@@ -1,0 +1,307 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Environment Engine",
+        "description": "Add the shared Global entry once (outdoor & energy sensors), then add a Room per area.",
+        "menu_options": {
+          "global": "Global settings (shared outdoor & energy sensors)",
+          "room": "Add a room"
+        }
+      },
+      "global": {
+        "title": "Global (shared) sensors",
+        "description": "Outdoor and energy sensors shared by every room — configure once. All optional.",
+        "data": {
+          "weather_entity": "Weather (outdoor)",
+          "forecast_high_sensor": "Weather / forecast source",
+          "outdoor_aqi_sensor": "Outdoor air quality (AQI or PM)",
+          "price_entity": "Energy price",
+          "price_average_sensor": "Average / reference price",
+          "lightning_distance_sensor": "Lightning sensor (Blitzortung)",
+          "price_forecast_sensor": "Price forecast (optional)"
+        },
+        "data_description": {
+          "weather_entity": "Outdoor temperature for solar load and passive-ventilation checks.",
+          "forecast_high_sensor": "Used to pre-cool ahead of the heat while power is cheap.",
+          "outdoor_aqi_sensor": "Outdoor AQI or PM sensor (e.g. a Sensor.Community PM10). Above the seal threshold, rooms seal and purify. Set the threshold to match your sensor's scale.",
+          "price_entity": "Current spot price. Drives eco easing when power is expensive.",
+          "price_average_sensor": "Daily-average price sensor: 'expensive' becomes above-average (self-tuning).",
+          "lightning_distance_sensor": "Point at any Blitzortung lightning sensor to enable lightning safety. The engine then reads the individual geo_location strikes (distance, count, recency) to decide holds — set it only if Blitzortung is installed.",
+          "price_forecast_sensor": "A sensor carrying the upcoming price curve (e.g. Elpriset's '…_forecast' sensor, or a Nordpool sensor). Enables percentile-based expensiveness and cheapest-window pre-cooling. Without it, the engine uses the current price vs the daily average."
+        }
+      },
+      "room": {
+        "title": "Add a room",
+        "description": "Pick the area to auto-discover its devices (optional)."
+      },
+      "entities": {
+        "title": "Room devices & sensors",
+        "description": "Everything is optional and grouped below — expand a section to add what this room has. Outdoor & energy sensors live in the Global entry. Add at least one device.",
+        "data": {
+          "name": "Room name"
+        },
+        "data_description": {
+          "name": "Names this room's device and entities (e.g. Bedroom)."
+        },
+        "sections": {
+          "climate_comfort": {
+            "name": "Climate & comfort",
+            "data": {
+              "climate_entity": "Air conditioner / heat pump",
+              "temperature_sensor": "Indoor temperature",
+              "fan_entity": "Fan",
+              "blinds_cover": "Blinds / cover",
+              "lux_sensor": "Light level (lux)"
+            },
+            "data_description": {
+              "climate_entity": "The climate device this room drives (cool, dry, fan).",
+              "temperature_sensor": "Drives cooling; falls back to the AC's own reading if empty.",
+              "fan_entity": "Circulation, air-quality assist, mould, or a gentle comfort breeze.",
+              "blinds_cover": "Closed against solar heat and glare; reopened once it clears.",
+              "lux_sensor": "Shades against bright sun; enables dark-room sleep mode."
+            }
+          },
+          "air_quality": {
+            "name": "Air quality",
+            "data": {
+              "aqi_sensor": "Air quality index (AQI)",
+              "pm25_sensor": "Indoor fine particulate (PM1/PM2.5)",
+              "pm10_sensor": "Indoor coarse particulate (PM10)",
+              "purifier_entity": "Air purifier",
+              "ionizer_entity": "Purifier ionizer",
+              "ventilation_entity": "Fresh-air / ventilation",
+              "co2_sensor": "CO₂",
+              "voc_sensor": "VOC"
+            },
+            "data_description": {
+              "aqi_sensor": "Preferred indoor air-quality input; drives the purifier.",
+              "pm25_sensor": "Your indoor fine-particle sensor (PM1 or PM2.5 — same 'fine' category). High indoors with clean outdoors = an indoor event: purify and air out.",
+              "pm10_sensor": "Optional indoor coarse-particle sensor (dust/pollen). Leave empty if your PM10 sensor is outdoors — that goes in the Global outdoor slot.",
+              "purifier_entity": "Runs and sets speed from air quality (fan or switch).",
+              "ionizer_entity": "Auxiliary; engages only on a strong pollutant surge.",
+              "ventilation_entity": "Fresh-air fan, ERV, vent, or window opener. Runs on high CO2; off during outdoor events.",
+              "co2_sensor": "Drives fresh-air ventilation and (without AQI) air-quality pressure.",
+              "voc_sensor": "Air quality when no AQI sensor is set."
+            }
+          },
+          "humidity": {
+            "name": "Humidity",
+            "data": {
+              "humidity_sensor": "Indoor humidity",
+              "humidifier_entity": "Humidifier / dehumidifier"
+            },
+            "data_description": {
+              "humidity_sensor": "Enables mould prevention, dry/dehumidify, muggy-cooling, and the dew-point guard.",
+              "humidifier_entity": "Driven by humidity and mould; a dehumidifier frees the AC to cool."
+            }
+          },
+          "presence_safety": {
+            "name": "Presence & safety",
+            "data": {
+              "occupancy_entity": "Presence / occupancy",
+              "window_entity": "Window / door contact",
+              "smoke_sensor": "Smoke alarm",
+              "outlet_overload_sensor": "Outlet overload",
+              "vent_entity": "Exhaust vent contact (portable AC)"
+            },
+            "data_description": {
+              "occupancy_entity": "When away, the room idles instead of conditioning empty space.",
+              "window_entity": "An open window pauses active cooling and favours passive ventilation.",
+              "smoke_sensor": "Safety: stops active devices when smoke is detected.",
+              "outlet_overload_sensor": "Safety: backs off when the circuit is overloaded.",
+              "vent_entity": "The contact sensor on the specific window/vent the portable AC's exhaust hose goes through. Only this (or the manual 'Exhaust Vented' switch) allows a portable unit to cool — a general door or window sensor won't, since an open door doesn't vent the hose."
+            }
+          }
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure",
+        "description": "Add, change, or clear entities. Clearing a field disables that capability.",
+        "data": {
+          "weather_entity": "Weather (outdoor)",
+          "forecast_high_sensor": "Weather / forecast source",
+          "outdoor_aqi_sensor": "Outdoor air quality (AQI or PM)",
+          "price_entity": "Energy price",
+          "price_average_sensor": "Average / reference price",
+          "name": "Room name",
+          "lightning_distance_sensor": "Lightning sensor (Blitzortung)",
+          "price_forecast_sensor": "Price forecast (optional)"
+        },
+        "data_description": {
+          "weather_entity": "Outdoor temperature for solar load and passive-ventilation checks.",
+          "forecast_high_sensor": "Used to pre-cool ahead of the heat while power is cheap.",
+          "outdoor_aqi_sensor": "Outdoor AQI or PM sensor (e.g. a Sensor.Community PM10). Above the seal threshold, rooms seal and purify. Set the threshold to match your sensor's scale.",
+          "price_entity": "Current spot price. Drives eco easing when power is expensive.",
+          "price_average_sensor": "Daily-average price sensor: 'expensive' becomes above-average (self-tuning).",
+          "name": "Names this room's device and entities (e.g. Bedroom).",
+          "lightning_distance_sensor": "Point at any Blitzortung lightning sensor to enable lightning safety. The engine then reads the individual geo_location strikes (distance, count, recency) to decide holds — set it only if Blitzortung is installed.",
+          "price_forecast_sensor": "A sensor carrying the upcoming price curve (e.g. Elpriset's '…_forecast' sensor, or a Nordpool sensor). Enables percentile-based expensiveness and cheapest-window pre-cooling. Without it, the engine uses the current price vs the daily average."
+        },
+        "sections": {
+          "climate_comfort": {
+            "name": "Climate & comfort",
+            "data": {
+              "climate_entity": "Air conditioner / heat pump",
+              "temperature_sensor": "Indoor temperature",
+              "fan_entity": "Fan",
+              "blinds_cover": "Blinds / cover",
+              "lux_sensor": "Light level (lux)"
+            },
+            "data_description": {
+              "climate_entity": "The climate device this room drives (cool, dry, fan).",
+              "temperature_sensor": "Drives cooling; falls back to the AC's own reading if empty.",
+              "fan_entity": "Circulation, air-quality assist, mould, or a gentle comfort breeze.",
+              "blinds_cover": "Closed against solar heat and glare; reopened once it clears.",
+              "lux_sensor": "Shades against bright sun; enables dark-room sleep mode."
+            }
+          },
+          "air_quality": {
+            "name": "Air quality",
+            "data": {
+              "aqi_sensor": "Air quality index (AQI)",
+              "pm25_sensor": "Indoor fine particulate (PM1/PM2.5)",
+              "pm10_sensor": "Indoor coarse particulate (PM10)",
+              "purifier_entity": "Air purifier",
+              "ionizer_entity": "Purifier ionizer",
+              "ventilation_entity": "Fresh-air / ventilation",
+              "co2_sensor": "CO₂",
+              "voc_sensor": "VOC"
+            },
+            "data_description": {
+              "aqi_sensor": "Preferred indoor air-quality input; drives the purifier.",
+              "pm25_sensor": "Your indoor fine-particle sensor (PM1 or PM2.5 — same 'fine' category). High indoors with clean outdoors = an indoor event: purify and air out.",
+              "pm10_sensor": "Optional indoor coarse-particle sensor (dust/pollen). Leave empty if your PM10 sensor is outdoors — that goes in the Global outdoor slot.",
+              "purifier_entity": "Runs and sets speed from air quality (fan or switch).",
+              "ionizer_entity": "Auxiliary; engages only on a strong pollutant surge.",
+              "ventilation_entity": "Fresh-air fan, ERV, vent, or window opener. Runs on high CO2; off during outdoor events.",
+              "co2_sensor": "Drives fresh-air ventilation and (without AQI) air-quality pressure.",
+              "voc_sensor": "Air quality when no AQI sensor is set."
+            }
+          },
+          "humidity": {
+            "name": "Humidity",
+            "data": {
+              "humidity_sensor": "Indoor humidity",
+              "humidifier_entity": "Humidifier / dehumidifier"
+            },
+            "data_description": {
+              "humidity_sensor": "Enables mould prevention, dry/dehumidify, muggy-cooling, and the dew-point guard.",
+              "humidifier_entity": "Driven by humidity and mould; a dehumidifier frees the AC to cool."
+            }
+          },
+          "presence_safety": {
+            "name": "Presence & safety",
+            "data": {
+              "occupancy_entity": "Presence / occupancy",
+              "window_entity": "Window / door contact",
+              "smoke_sensor": "Smoke alarm",
+              "outlet_overload_sensor": "Outlet overload",
+              "vent_entity": "Exhaust vent contact (portable AC)"
+            },
+            "data_description": {
+              "occupancy_entity": "When away, the room idles instead of conditioning empty space.",
+              "window_entity": "An open window pauses active cooling and favours passive ventilation.",
+              "smoke_sensor": "Safety: stops active devices when smoke is detected.",
+              "outlet_overload_sensor": "Safety: backs off when the circuit is overloaded.",
+              "vent_entity": "The contact sensor on the specific window/vent the portable AC's exhaust hose goes through. Only this (or the manual 'Exhaust Vented' switch) allows a portable unit to cool — a general door or window sensor won't, since an open door doesn't vent the hose."
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "single_global": "A Global entry already exists — only one is allowed. Reconfigure it instead.",
+      "reconfigure_successful": "Reconfigured."
+    },
+    "error": {
+      "no_entities": "Add at least one device or sensor for this room."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Environment Engine options",
+        "description": "Room comfort settings. (Energy & outdoor thresholds live on the Global entry.)",
+        "data": {
+          "auto_apply": "Automatically apply decisions",
+          "fan_comfort": "Gentle fan breeze when warm",
+          "target_temperature": "Comfort temperature",
+          "update_interval": "Update interval",
+          "min_change_interval": "Minimum time between changes",
+          "compressor_min_cycle": "Compressor minimum cycle time",
+          "co2_threshold": "CO₂ threshold",
+          "co2_ventilate": "CO₂ level to bring in fresh air",
+          "voc_threshold": "VOC threshold",
+          "lux_threshold": "Light level for shading (lux)",
+          "sleep_lux": "Darkness for sleep mode (lux)",
+          "target_humidity": "Target humidity (%)",
+          "humidity_comfort": "Humidity comfort level (%)",
+          "humidity_cooling": "Feels-like humidity boost (°C)",
+          "aqi_threshold": "AQI to start the purifier",
+          "pm25_threshold": "Fine particle threshold (PM2.5, µg/m³)",
+          "pm10_threshold": "Coarse particle threshold (PM10, µg/m³)",
+          "dewpoint_margin": "Dew-point safety margin (°C)",
+          "price_high": "Price considered high",
+          "outdoor_aqi_threshold": "Outdoor AQI to seal & purify",
+          "lightning_distance": "Max lightning reaction distance (km)",
+          "air_recovery": "Air-quality recovery time (min)",
+          "presence_hold": "Presence hold after last motion (min)",
+          "filter_life": "Purifier filter life (h)",
+          "portable_ac": "Portable AC (needs a vent)",
+          "vent_revert": "Exhaust-vented auto-revert (h)",
+          "pricing_mode": "Electricity pricing",
+          "device_min_cycle": "Device minimum on/off time (s)",
+          "quiet_hours": "Quiet hours",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_max_temp": "Cool anyway above (°C)",
+          "ionizer_mode": "Ionizer"
+        },
+        "data_description": {
+          "auto_apply": "When off, the engine shows what it would do without touching any device.",
+          "target_temperature": "Your one comfortable temperature; the engine adapts the real setpoint.",
+          "min_change_interval": "Anti-flapping: how long a device holds before it may change again.",
+          "compressor_min_cycle": "Protects the AC: the compressor won't switch on/off more often than this. 0 disables.",
+          "co2_ventilate": "CO2 at/above which the ventilation device brings in fresh air.",
+          "sleep_lux": "When dark (at/below this) and the sun is down, ease more and keep devices quiet. 0 disables.",
+          "humidity_comfort": "Above this humidity, a warm room is treated as muggy.",
+          "humidity_cooling": "How many °C humid air may add to the perceived ('feels-like') temperature, so a muggy room is cooled like a warmer one. 0 disables (use dry-bulb temperature only).",
+          "dewpoint_margin": "The AC won't cool below the room's dew point plus this margin. 0 disables.",
+          "price_high": "Only used when no average sensor is set: the price at/above which power is expensive.",
+          "outdoor_aqi_threshold": "Outdoor air quality at/above which rooms seal and purify hard.",
+          "pm25_threshold": "PM2.5 (µg/m³) at/above which fine particles count as elevated.",
+          "pm10_threshold": "PM10 (µg/m³) at/above which coarse particles count as elevated.",
+          "lightning_distance": "Ignore strikes farther than this. Within it, closeness and strike frequency decide how long the hold lasts.",
+          "air_recovery": "After an air-quality spike (cooking, smoke), keep the purifier elevated while it decays back to baseline over roughly this half-life. 0 = react to the live reading only.",
+          "presence_hold": "Stay 'occupied' for about this long after the last detection, so sitting still doesn't flip the room to away. 0 = react instantly.",
+          "filter_life": "Flag 'Filter Due' once the purifier has run this many hours. 0 disables the reminder.",
+          "portable_ac": "Mark this if the AC is a portable unit with an exhaust hose. Cooling then runs only when the exhaust is vented (the window/vent sensor is open, or the manual 'Exhaust Vented' switch is on); otherwise it falls back to fan-only. Leave off for split/installed units.",
+          "vent_revert": "The manual 'Exhaust Vented' switch turns itself back off after this long, so a forgotten toggle can't vent hot air indefinitely. 0 = never auto-revert.",
+          "pricing_mode": "Spot: shift cooling toward cheap hours and ease off when expensive. Fixed: flat-rate contract — ignore price entirely and optimise for comfort.",
+          "device_min_cycle": "Wear protection: once the fan or purifier starts or stops, keep it that way for at least this long, to avoid rapid start/stop cycling. 0 disables (the AC compressor has its own separate protection).",
+          "quiet_hours": "During quiet hours the engine keeps the compressor off and moves air instead (the AC's fan-only mode, plus any fan), so a bedroom stays quiet at night. It still cools if the room gets too hot — see below.",
+          "quiet_start": "When the quiet window begins (it may run past midnight).",
+          "quiet_end": "When the quiet window ends.",
+          "quiet_max_temp": "Comfort override: if the room (feels-like) reaches this temperature during quiet hours, the compressor runs anyway rather than let you cook. Set high to keep quiet hours strict.",
+          "ionizer_mode": "When the ionizer runs. 'With the purifier' turns it on whenever the purifier runs; 'Only on heavy pollution' saves it for a strong surge; 'Never' leaves it off."
+        }
+      }
+    }
+  },
+  "selector": {
+    "pricing_mode": {
+      "options": {
+        "spot": "Spot / hourly price",
+        "fixed": "Fixed price (flat rate)"
+      }
+    },
+    "ionizer_mode": {
+      "options": {
+        "with_purifier": "With the purifier",
+        "surge": "Only on heavy pollution",
+        "never": "Never"
+      }
+    }
+  }
+}
