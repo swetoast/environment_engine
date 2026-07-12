@@ -80,6 +80,8 @@ class ThermalModel:
         self.cooling_effect: dict[str, float] = {}    # °C/min removed, by outdoor band
         self._cooling_counts: dict[str, int] = {}
         self.struggling = False                       # cooling, but the room still gains
+        self._residual_ema = 0.0                      # persistent, *signed* model error
+        self._noise_var = 0.0                         # baseline noise, measured in quiet times only
 
     # ---------- fitting ----------
     def update(self, previous, current, dt_minutes: float, cooling: bool, solar: float) -> bool:
@@ -139,6 +141,16 @@ class ThermalModel:
             for j in range(_N):
                 self.p[i][j] = (self.p[i][j] - gain[i] * px[j]) / _FORGET
         self._residual_var = 0.95 * self._residual_var + 0.05 * (error * error)
+        # A one-off error is noise. An error that keeps pointing the same way is the room
+        # doing something the physics can't explain -- that's the interesting signal.
+        self._residual_ema = 0.85 * self._residual_ema + 0.15 * error
+        # The yardstick has to be the room's *quiet* noise. Folding the anomaly into the
+        # same variance we measure it against would let a big enough event hide inside its
+        # own inflated error bars, so ordinary-looking errors update the baseline and
+        # outliers are left out of it.
+        sigma = max(self._noise_var ** 0.5, 1e-4)
+        if self._noise_var == 0.0 or abs(error) < 3.0 * sigma:
+            self._noise_var = 0.98 * self._noise_var + 0.02 * (error * error)
 
     def _record_cooling(self, rate: float, outdoor: float) -> None:
         band = self.outdoor_band(outdoor)
@@ -221,6 +233,33 @@ class ThermalModel:
             return 0.0
         return _clamp((self.effectiveness - 0.5) * 2.0 * cap * self.confidence, -cap, cap)
 
+    @property
+    def unexplained_drift(self) -> float:
+        """°C/min the room is gaining (or losing) that the model cannot account for.
+
+        The model already explains the outdoors, the sun, the AC and you. Whatever is left
+        over, *persistently and in one direction*, is something real that nobody told the
+        engine about: a window cracked open, a door left ajar, an oven running, a radiator
+        that came on, or a sensor quietly drifting.
+        """
+        return self._residual_ema if self.confidence > 0.0 else 0.0
+
+    @property
+    def anomaly_score(self) -> float:
+        """The unexplained drift measured in units of the model's own noise. Above ~2 it is
+        no longer plausibly noise. Scaled by confidence, so an unlearned model never accuses."""
+        if self.confidence <= 0.0:
+            return 0.0
+        sigma = max(self._noise_var ** 0.5, 1e-4)
+        return _clamp(abs(self._residual_ema) / sigma, 0.0, 10.0) * self.confidence
+
+    def anomaly(self, threshold: float = 2.0) -> str | None:
+        """'heating' / 'cooling' when the room is drifting well beyond what the physics
+        explains, else None."""
+        if self.anomaly_score < threshold:
+            return None
+        return "heating" if self._residual_ema > 0 else "cooling"
+
     # ---------- prediction ----------
     def drift(self, indoor: float, outdoor: float, solar: float, cooling: bool = False,
               occupied: bool = False) -> float:
@@ -293,6 +332,8 @@ class ThermalModel:
             "samples": self.samples,
             "rejected": self.rejected,
             "residual_var": self._residual_var,
+            "residual_ema": self._residual_ema,
+            "noise_var": self._noise_var,
             "buckets": {"rates": dict(self.buckets.rates), "counts": dict(self.buckets.counts)},
             "cooling_effect": dict(self.cooling_effect),
         }
@@ -312,6 +353,8 @@ class ThermalModel:
             self.samples = int(data.get("samples", 0))
             self.rejected = int(data.get("rejected", 0))
             self._residual_var = float(data.get("residual_var", 0.0))
+            self._residual_ema = float(data.get("residual_ema", 0.0))
+            self._noise_var = float(data.get("noise_var", 0.0))
             buckets = data.get("buckets") or {}
             self.buckets.rates = {str(k): float(v) for k, v in (buckets.get("rates") or {}).items()}
             self.buckets.counts = {str(k): int(v) for k, v in (buckets.get("counts") or {}).items()}

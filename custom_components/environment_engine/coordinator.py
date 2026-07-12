@@ -6,6 +6,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from .adaptive_learning import AdaptiveLearning
+from .air_model import AirModel, speed_fraction
 from .thermal_model import ThermalModel
 from .capabilities import build_capabilities
 from .const import CONF_AQI, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY
@@ -42,6 +43,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hysteresis = HysteresisEngine()
         self.learning = AdaptiveLearning()
         self.thermal = ThermalModel()
+        self.air = AirModel()
         self._model_store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.thermal")
         self._last_update_ts = None
         self.aq_memory = PeakDecay()
@@ -83,7 +85,11 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _dt_min = (_now_ts - self._last_update_ts) / 60.0 if self._last_update_ts is not None else 0.0
         self._last_update_ts = _now_ts
         was_cooling = getattr(self.previous_decision, "hvac_mode", None) in (HVAC_COOL, HVAC_DRY)
-        if self.thermal.update(self.previous_snapshot, snapshot, _dt_min, was_cooling, self._solar_proxy(self.previous_snapshot)):
+        learned = self.thermal.update(self.previous_snapshot, snapshot, _dt_min, was_cooling, self._solar_proxy(self.previous_snapshot))
+        previous = self.previous_decision
+        purifier_speed = speed_fraction(getattr(previous, "purifier_action", None), getattr(previous, "purifier_speed", None))
+        learned |= self.air.update(self.previous_snapshot, snapshot, _dt_min, purifier_speed)
+        if learned:
             self._save_model()
         memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp)
         evaluations = self._evaluate(snapshot, memory)
@@ -279,12 +285,16 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # a corrupt store must never block startup; re-learning is safe
             _LOGGER.debug("Could not load the thermal model; starting fresh")
             return
-        if stored and self.thermal.restore(stored):
+        if not stored:
+            return
+        if self.thermal.restore(stored.get("thermal")):
             _LOGGER.debug("Restored thermal model (%s samples)", self.thermal.samples)
+        if self.air.restore(stored.get("air")):
+            _LOGGER.debug("Restored air model (%s samples)", self.air.samples)
 
     def _save_model(self) -> None:
         """Debounced write -- the coordinator runs every minute, the disk shouldn't."""
-        self._model_store.async_delay_save(self.thermal.as_dict, 300)
+        self._model_store.async_delay_save(lambda: {"thermal": self.thermal.as_dict(), "air": self.air.as_dict()}, 300)
 
     @staticmethod
     def _solar_proxy(snapshot) -> float:

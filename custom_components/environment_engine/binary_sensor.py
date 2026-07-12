@@ -5,7 +5,7 @@ from .const import DOMAIN
 from .entity import EnvironmentEngineEntity
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    async_add_entities([EnvironmentBlockedSensor(coordinator, entry), EnvironmentInvalidEntitiesSensor(coordinator, entry), EnvironmentFilterDueSensor(coordinator, entry), EnvironmentStrugglingSensor(coordinator, entry)])
+    async_add_entities([EnvironmentBlockedSensor(coordinator, entry), EnvironmentInvalidEntitiesSensor(coordinator, entry), EnvironmentFilterDueSensor(coordinator, entry), EnvironmentStrugglingSensor(coordinator, entry), EnvironmentUnexplainedHeatSensor(coordinator, entry)])
 class EnvironmentBlockedSensor(EnvironmentEngineEntity, BinarySensorEntity):
     _attr_name = "Blocked"
     _attr_icon = "mdi:shield-alert"
@@ -41,11 +41,23 @@ class EnvironmentFilterDueSensor(EnvironmentEngineEntity, BinarySensorEntity):
     @property
     def is_on(self):
         life = self.coordinator.options.filter_life
+        health = self.coordinator.air.filter_health
+        if health is not None and health < 0.5:
+            return True  # measured: it has lost half its cleaning power, whatever the clock says
+        life = self.coordinator.options.filter_life
         return life > 0 and self.coordinator.data["runtime"]["purifier"] >= life
 
     @property
     def extra_state_attributes(self):
-        return {"filter_used_hours": round(self.coordinator.data["runtime"]["purifier"], 1), "filter_life_hours": self.coordinator.options.filter_life}
+        health = self.coordinator.air.filter_health
+        attrs = {
+            "filter_used_hours": round(self.coordinator.data["runtime"]["purifier"], 1),
+            "filter_life_hours": self.coordinator.options.filter_life,
+        }
+        if health is not None:
+            attrs["filter_health_pct"] = round(health * 100)
+            attrs["measured_clean_rate"] = round(self.coordinator.air.clean_rate, 4)
+        return attrs
 
 
 class EnvironmentStrugglingSensor(EnvironmentEngineEntity, BinarySensorEntity):
@@ -71,4 +83,33 @@ class EnvironmentStrugglingSensor(EnvironmentEngineEntity, BinarySensorEntity):
             "ac_removes_c_per_hour": round(-model.cooling_power * 60, 2),
             "cooling_effectiveness_pct": round(model.effectiveness * 100),
             "measured_by_outdoor_band": {band: round(rate * 60, 2) for band, rate in model.cooling_effect.items()},
+        }
+
+
+class EnvironmentUnexplainedHeatSensor(EnvironmentEngineEntity, BinarySensorEntity):
+    """On when the room is gaining (or losing) heat that the learned model cannot account for.
+
+    The model already explains the outdoors, the sun, the AC and you. A persistent, one-sided
+    error means something real that nobody told the engine about: a window cracked open, a door
+    left ajar, an oven running, a radiator that came on -- or a temperature sensor quietly
+    drifting out of calibration.
+    """
+    _attr_name = "Unexplained Heat"
+    _attr_icon = "mdi:home-alert-outline"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "unexplained_heat")
+
+    @property
+    def is_on(self):
+        return self.coordinator.thermal.anomaly() is not None
+
+    @property
+    def extra_state_attributes(self):
+        model = self.coordinator.thermal
+        return {
+            "direction": model.anomaly() or "none",
+            "unexplained_c_per_hour": round(model.unexplained_drift * 60, 2),
+            "how_unusual": round(model.anomaly_score, 1),
         }

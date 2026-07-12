@@ -123,6 +123,11 @@ class EnvironmentDiagnosticsSensor(EnvironmentEngineEntity, SensorEntity):
             "model_samples_rejected": self.coordinator.thermal.rejected,
             "cooling_effectiveness_pct": round(self.coordinator.thermal.effectiveness * 100),
             "cooling_bias": round(self.coordinator.thermal.cooling_bias(), 3),
+            "anomaly_score": round(self.coordinator.thermal.anomaly_score, 1),
+            "air_model_samples": self.coordinator.air.samples,
+            "air_model_confidence_pct": round(self.coordinator.air.confidence * 100),
+            "purifier_clean_rate": round(self.coordinator.air.clean_rate, 4),
+            "outdoor_air_infiltration": round(self.coordinator.air.infiltration, 3),
             "invalid_entities": s.invalid_entities,
         }
         attrs.update({f"has_{field.name}": getattr(c, field.name) for field in dataclasses.fields(c)})
