@@ -127,18 +127,3 @@ Pure, dependency-free helper modules do the real work and are unit-tested in iso
 `thermal_model` (the learned physics), `price` (forecast, rank, cheapest window), `psychrometrics`
 (dew point, feels-like), `decay` (peak-hold decay for PM recovery, seal and presence holds),
 `forecast`, `lightning`, `runtime`, `quiet_hours`, `presets`.
-
----
-
-## Development
-
-    python -m pytest tests/ -q      # 214 tests
-    python -m pyflakes .
-
-`config_flow.py`, `coordinator.py` and the entity platforms are Home Assistant-heavy and aren't
-covered by the unit tests, so `AUDIT.md` documents a set of standing static checks for the bug
-classes that `pytest` and `pyflakes` structurally cannot see (unresolvable internal imports,
-malformed schema tuples, option/field drift, dataclass fields that are written but never read).
-Run them before shipping.
-
-See `DESIGN.md` for the reasoning behind each decision and `IMPROVEMENTS.md` for what's next.
