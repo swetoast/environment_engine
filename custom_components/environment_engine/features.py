@@ -42,6 +42,7 @@ def _supported(state) -> int | None:
 class ClimateFeatures:
     target_temperature: bool = True
     turn_off: bool = True
+    fan_mode: bool = False
 
 
 @dataclass(slots=True)
@@ -63,6 +64,7 @@ def climate_features(state) -> ClimateFeatures:
     return ClimateFeatures(
         target_temperature=bool(features & _bit(ClimateEntityFeature, "TARGET_TEMPERATURE", 1)),
         turn_off=bool(features & _bit(ClimateEntityFeature, "TURN_OFF", 128)),
+        fan_mode=bool(features & _bit(ClimateEntityFeature, "FAN_MODE", 8)),
     )
 
 

@@ -18,5 +18,6 @@ class Decision:
     purifier_speed: str | None = None
     ionizer_action: str = ACTION_NONE
     ventilation_action: str = ACTION_NONE
+    climate_fan_speed: str | None = None
     def signature(self) -> tuple:
-        return (self.strategy, self.hvac_mode, self.target_temperature, self.fan_action, self.fan_speed, self.cover_action, self.purifier_action, self.humidifier_action, self.humidifier_target, self.purifier_speed, self.ionizer_action, self.ventilation_action)
+        return (self.strategy, self.hvac_mode, self.target_temperature, self.fan_action, self.fan_speed, self.cover_action, self.purifier_action, self.humidifier_action, self.humidifier_target, self.purifier_speed, self.ionizer_action, self.ventilation_action, self.climate_fan_speed)

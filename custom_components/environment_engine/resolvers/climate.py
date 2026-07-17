@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..confidence import speed_tier
 from ..evaluators import drying_pressure
 from ..const import (
     HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, HVAC_OFF,
@@ -12,7 +13,7 @@ _MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
 
 
 def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
-    """Decide the climate actuator alone. Returns (hvac_mode|None, target|None, driver|None).
+    """Decide the climate actuator alone. Returns (hvac_mode|None, target|None, fan_speed|None, driver|None).
 
     hvac_mode is None when the engine should not touch the climate at all (no
     climate, climate offline, or a mode it does not manage).
@@ -26,14 +27,14 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
     so the two don't double up.
     """
     if not capabilities.climate or not snapshot.climate_valid:
-        return None, None, None
+        return None, None, None, None
     if not snapshot.temperature_valid:
         # The temperature sensor is missing or offline, so the room reading is a
         # placeholder, not a measurement. Don't act on it: standing the unit down here
         # would turn the AC off on a momentary sensor blip (and then anti-short-cycling
         # would delay the restart). Leave the unit alone -- it has its own thermostat and
         # keeps regulating to the setpoint we last gave it.
-        return None, None, None
+        return None, None, None, None
     modes = snapshot.hvac_modes
     thermal = ev["thermal"]
     mold = ev["mold"]
@@ -49,21 +50,24 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
     ac_fan_ok = HVAC_FAN_ONLY in modes and (quiet or not capabilities.fan)
 
     if can_cool and capabilities.humidity and not capabilities.humidifier and drying > thermal.confidence and drying >= 0.3 and HVAC_DRY in modes:
-        return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
+        return HVAC_DRY, None, None, STRATEGY_DEHUMIDIFY
     if thermal.confidence >= 0.3:
+        speed = speed_tier(thermal.confidence, 0.8, 0.5)  # push more air the hotter it is
         if passive_cooling and HVAC_FAN_ONLY in modes:
-            return HVAC_FAN_ONLY, None, STRATEGY_PASSIVE_VENTILATION
+            return HVAC_FAN_ONLY, None, speed, STRATEGY_PASSIVE_VENTILATION
         if can_cool and HVAC_COOL in modes:
             target = ev["target"].effective_target if "target" in ev else options.target
-            return HVAC_COOL, target, STRATEGY_COOLING
+            return HVAC_COOL, target, speed, STRATEGY_COOLING
         # Cooling is held back (quiet hours, or portable + unvented): keep air moving.
         if ac_fan_ok:
-            return HVAC_FAN_ONLY, None, (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
+            # In quiet hours keep it gentle; otherwise match the heat.
+            fan_speed = "low" if quiet else speed
+            return HVAC_FAN_ONLY, None, fan_speed, (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
     # Gentle circulation via the AC when it's the only air mover in the room.
     if ac_fan_ok and options.fan_comfort and thermal.confidence >= 0.15:
-        return HVAC_FAN_ONLY, None, (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
+        return HVAC_FAN_ONLY, None, "low", (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
     if mold.airflow_recommended and ac_fan_ok:
-        return HVAC_FAN_ONLY, None, STRATEGY_MOLD_PREVENTION
+        return HVAC_FAN_ONLY, None, "low", STRATEGY_MOLD_PREVENTION
     if snapshot.hvac_mode in _MANAGED:
-        return HVAC_OFF, None, None
-    return None, None, None
+        return HVAC_OFF, None, None, None
+    return None, None, None, None

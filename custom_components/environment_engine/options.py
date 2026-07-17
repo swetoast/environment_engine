@@ -47,6 +47,14 @@ def _as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+def _time_str(value, default: str) -> str:
+    """Normalise a TimeSelector value (time / 'HH:MM[:SS]' / dict) to 'HH:MM'.
+    Keeps stored options robust regardless of which shape HA handed us."""
+    from .quiet_hours import parse_time
+    parsed = parse_time(value)
+    return parsed.strftime("%H:%M") if parsed is not None else default
+
+
 def _as_float(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -82,8 +90,8 @@ def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOpt
         pricing_mode=(merged.get(OPT_PRICING_MODE) if merged.get(OPT_PRICING_MODE) in (PRICING_SPOT, PRICING_FIXED) else DEFAULTS[OPT_PRICING_MODE]),
         device_min_cycle=max(_as_int(merged.get(OPT_DEVICE_MIN_CYCLE), DEFAULTS[OPT_DEVICE_MIN_CYCLE]), 0),
         quiet_hours=bool(merged.get(OPT_QUIET_HOURS, DEFAULTS[OPT_QUIET_HOURS])),
-        quiet_start=str(merged.get(OPT_QUIET_START) or DEFAULTS[OPT_QUIET_START]),
-        quiet_end=str(merged.get(OPT_QUIET_END) or DEFAULTS[OPT_QUIET_END]),
+        quiet_start=_time_str(merged.get(OPT_QUIET_START), DEFAULTS[OPT_QUIET_START]),
+        quiet_end=_time_str(merged.get(OPT_QUIET_END), DEFAULTS[OPT_QUIET_END]),
         quiet_max_temp=_as_float(merged.get(OPT_QUIET_MAX_TEMP), DEFAULTS[OPT_QUIET_MAX_TEMP]),
         ionizer_mode=(merged.get(OPT_IONIZER_MODE) if merged.get(OPT_IONIZER_MODE) in (IONIZER_WITH_PURIFIER, IONIZER_SURGE, IONIZER_NEVER) else DEFAULTS[OPT_IONIZER_MODE]),
         co2_ventilate=max(_as_int(merged.get(OPT_CO2_VENTILATE), DEFAULTS[OPT_CO2_VENTILATE]), 400),

@@ -34,7 +34,7 @@ class Planner:
         if safety.blocked:
             return Decision(STRATEGY_SAFETY_STOP, safety.hvac_mode or HVAC_OFF, None, ACTION_OFF, None, ACTION_NONE, ACTION_NONE, 1.0, safety.reason, True)
         if not snapshot.occupancy:
-            return self._away(snapshot)
+            return self._away(snapshot, evaluations)
 
         passive_cooling = (
             self.capabilities.windows
@@ -46,7 +46,7 @@ class Planner:
         )
 
         sleep = not snapshot.sun_up and snapshot.dark  # genuinely dark night
-        hvac_mode, target, climate_driver = resolve_climate(snapshot, self.capabilities, self.options, evaluations, passive_cooling)
+        hvac_mode, target, climate_fan_speed, climate_driver = resolve_climate(snapshot, self.capabilities, self.options, evaluations, passive_cooling)
         fan_action, fan_speed, fan_driver = resolve_fan(snapshot, self.capabilities, self.options, evaluations, passive_cooling, sleep)
         cover_action, cover_driver = resolve_cover(snapshot, self.capabilities, evaluations)
         purifier_action, purifier_speed, ionizer_action, purifier_driver = resolve_purifier(self.capabilities, self.options, evaluations, sleep)
@@ -56,13 +56,22 @@ class Planner:
         drivers = {d for d in (climate_driver, fan_driver, cover_driver, purifier_driver, humidifier_driver, ventilation_driver) if d}
         strategy = self._label(drivers, snapshot)
         confidence, reason = self._summary(strategy, evaluations)
-        return Decision(strategy, hvac_mode, target, fan_action, fan_speed, cover_action, purifier_action, confidence, reason, humidifier_action=humidifier_action, humidifier_target=humidifier_target, purifier_speed=purifier_speed, ionizer_action=ionizer_action, ventilation_action=ventilation_action)
+        return Decision(strategy, hvac_mode, target, fan_action, fan_speed, cover_action, purifier_action, confidence, reason, humidifier_action=humidifier_action, humidifier_target=humidifier_target, purifier_speed=purifier_speed, ionizer_action=ionizer_action, ventilation_action=ventilation_action, climate_fan_speed=climate_fan_speed)
 
-    def _away(self, snapshot) -> Decision:
+    def _away(self, snapshot, evaluations) -> Decision:
         managed = self.capabilities.climate and snapshot.climate_valid and snapshot.hvac_mode in _MANAGED
         hvac = HVAC_OFF if managed else None
         fan = ACTION_OFF if self.capabilities.fan else ACTION_NONE
         vent = ACTION_OFF if self.capabilities.ventilation else ACTION_NONE
+        # An empty house still deserves protection during an outdoor air-quality event: seal
+        # the ventilation and keep the purifier running so infiltrating smoke doesn't just
+        # settle into the home. Everything else stays idle to save energy while away.
+        aq = evaluations["air_quality"]
+        if aq.seal and self.capabilities.purifier and self.capabilities.air_quality:
+            purifier, speed, ionizer, _ = resolve_purifier(self.capabilities, self.options, evaluations, sleep=False)
+            return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, ACTION_NONE, purifier, 1.0,
+                            "sealing against outdoor air while away", purifier_speed=speed,
+                            ionizer_action=ionizer, ventilation_action=vent)
         return Decision(STRATEGY_AWAY_IDLE, hvac, None, fan, None, ACTION_NONE, ACTION_NONE, 1.0, "home is unoccupied", ventilation_action=vent)
 
     def _label(self, drivers, snapshot) -> str:

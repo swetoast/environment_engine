@@ -1,7 +1,8 @@
 from __future__ import annotations
 import logging
 from homeassistant.const import ATTR_ENTITY_ID
-from ..const import CONF_CLIMATE, HVAC_COOL, HVAC_OFF
+from ..const import CONF_CLIMATE, HVAC_COOL, HVAC_FAN_ONLY, HVAC_OFF
+from ..presets import preset_for_speed
 from ..entities import as_list
 from ..features import climate_features
 from ..units import from_celsius
@@ -34,6 +35,14 @@ async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
             return True
         if assumed or state.state != decision.hvac_mode:
             await hass.services.async_call("climate", "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": decision.hvac_mode}, blocking=True)
+        # When we run the unit for airflow (fan_only, or a cooling boost), actually set the
+        # fan speed. Otherwise the AC stays on whatever it had -- usually 'auto'/'quiet' --
+        # and "circulate to shed heat" barely moves any air. Map our tier onto the unit's
+        # own fan modes; skip if it has none or is already there.
+        if decision.hvac_mode in (HVAC_FAN_ONLY, HVAC_COOL) and decision.climate_fan_speed and feats.fan_mode:
+            desired = preset_for_speed(state.attributes.get("fan_modes"), decision.climate_fan_speed)
+            if desired is not None and (assumed or state.attributes.get("fan_mode") != desired):
+                await hass.services.async_call("climate", "set_fan_mode", {ATTR_ENTITY_ID: entity_id, "fan_mode": desired}, blocking=True)
         if decision.hvac_mode == HVAC_COOL and decision.target_temperature is not None and feats.target_temperature:
             target = round(float(from_celsius(float(decision.target_temperature), snapshot.temperature_unit)), 1)
             dmin, dmax = state.attributes.get("min_temp"), state.attributes.get("max_temp")
