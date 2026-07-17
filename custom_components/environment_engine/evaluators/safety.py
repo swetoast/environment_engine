@@ -13,6 +13,8 @@ def evaluate_safety(snapshot, capabilities, options) -> SafetyResult:
     if capabilities.outlet_overload and snapshot.outlet_overloaded:
         return SafetyResult(True, "off", "outlet overload detected")
     if capabilities.lightning and snapshot.lightning_hold:
+        # For the AC there is no advisory tier: any active hold stops the compressor. The band
+        # only labels how close the storm is; it does not decide whether to block.
         strikes = snapshot.lightning_strikes
         closest = round(snapshot.lightning_closest) if snapshot.lightning_closest is not None else "?"
         return SafetyResult(True, "off", f"lightning within {closest} km ({strikes} strike{'s' if strikes != 1 else ''})")

@@ -17,7 +17,7 @@ from .forecast import heat_outlook, upcoming_peak
 from .hysteresis import HysteresisEngine
 from dataclasses import replace as _dc_replace
 from .decay import PeakDecay
-from .lightning import lightning_hold
+from .lightning import lightning_band, lightning_hold
 from .options import build_options, resolved_options
 from .const import PRICING_SPOT as _PRICING_SPOT
 from .price import day_values, in_cheapest_window, price_rank as _price_rank, price_series
@@ -438,6 +438,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lightning_hold=lh,
             lightning_closest=lc,
             lightning_strikes=ls,
+            lightning_band=lightning_band(lc) if lh else "clear",
             outlet_overloaded=self._any_on(CONF_OUTLET_OVERLOAD),
             temperature_valid=indoor is not None,
             climate_valid=climate_valid,

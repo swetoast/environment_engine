@@ -34,6 +34,7 @@ class Snapshot:
     lightning_hold: bool = False
     lightning_closest: float | None = None
     lightning_strikes: int = 0
+    lightning_band: str = "clear"
     pm25: float | None = None
     pm10: float | None = None
     dark: bool = False
