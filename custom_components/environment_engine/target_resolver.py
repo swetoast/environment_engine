@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from .comfort import humidity_penalty
+from .const import WARMING_TREND_C_PER_MIN
 from .psychrometrics import dew_point
 
 _MAX_DROP = 1.5          # reactive (indoor heat + trend)
@@ -62,7 +63,10 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
     # --- reactive drop (indoor heat excess + warming trend), anchored to baseline ---
     excess = max(0.0, snapshot.indoor_temp - base)
     thermal_drop = (excess * _MAX_DROP / (excess + _SOFTNESS)) if excess > 0 else 0.0
-    trend_drop = min(max(memory.temperature_trend, 0.0), 1.0) * _TREND_DROP if memory.temperature_trend > 0.15 else 0.0
+    # Scale the drop by how far past the threshold the room is warming, so a room that is
+    # merely drifting gets a nudge and one that is climbing fast gets the full degree.
+    trend_drop = (_TREND_DROP * min(memory.temperature_trend / (WARMING_TREND_C_PER_MIN * 4), 1.0)
+                  if memory.temperature_trend > WARMING_TREND_C_PER_MIN else 0.0)
     reactive_drop = min(thermal_drop + trend_drop, _MAX_DROP)
 
     # --- preemptive outdoor-heat drop (small; solar already biases confidence) ---

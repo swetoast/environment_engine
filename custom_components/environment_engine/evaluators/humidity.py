@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from ..const import RISING_HUMIDITY_PCT
 from ..confidence import clamp, confidence_score, pressure_tier
 @dataclass(slots=True)
 class HumidityResult:
@@ -11,7 +12,7 @@ def evaluate_humidity(snapshot, memory, learning_bias: float = 0.0) -> HumidityR
         return HumidityResult(0.0, 0.0, "humidity sensor unavailable")
     pressure = clamp((snapshot.humidity - 55.0) / 45.0)
     bonuses = [learning_bias]
-    if memory.humidity_trend > 0.5:
+    if memory.humidity_trend > RISING_HUMIDITY_PCT:
         bonuses.append(0.1)
     confidence = confidence_score(pressure, [], bonuses)
     reason = pressure_tier(confidence, "humidity")

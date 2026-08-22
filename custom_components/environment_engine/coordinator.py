@@ -91,7 +91,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         learned |= self.air.update(self.previous_snapshot, snapshot, _dt_min, purifier_speed)
         if learned:
             self._save_model()
-        memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp)
+        memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp,
+                                          snapshot.temperature_valid, _dt_min)
         evaluations = self._evaluate(snapshot, memory)
         raw_decision = Planner(self.capabilities, self.options).plan(snapshot, evaluations)
         fan_only_mode = HVAC_FAN_ONLY if HVAC_FAN_ONLY in snapshot.hvac_modes else None

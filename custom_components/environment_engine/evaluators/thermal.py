@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from ..confidence import clamp, confidence_score, pressure_tier
+from ..const import WARMING_TREND_C_PER_MIN
 @dataclass(slots=True)
 class ThermalResult:
     pressure: float
@@ -22,7 +23,7 @@ def evaluate_thermal(snapshot, memory, solar_pressure: float, energy_penalty: fl
     lead = anticipation if excess > 0.0 else 0.0
     base = clamp((excess + lead) / 3.0)
     bonuses = [solar_pressure * 0.25, memory.thermal_inertia * 0.1, learning_bias]
-    if memory.temperature_trend > 0.15:
+    if memory.temperature_trend > WARMING_TREND_C_PER_MIN:
         bonuses.append(0.1)
     # Price influences how HARD the engine cools (via the setpoint), never WHETHER it
     # cools. Subtracting it here meant an expensive evening pushed the cool-start point

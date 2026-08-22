@@ -76,6 +76,13 @@ STRATEGY_HUMIDIFY = "humidify"
 STRATEGY_AIR_CIRCULATION = "air_circulation"
 STRATEGY_QUIET_COOLING = "quiet_cooling"
 STRATEGY_AWAY_IDLE = "away_idle"
+# A room that is genuinely warming. Real rooms move at roughly 1-3 C/hour on a hot day
+# (Toast's July history: 24 -> 31 C over eight hours is 0.9 C/h), so the old 0.15 C/min
+# threshold -- 9 C/hour -- was a rate no room reaches, and every rule behind it was dead.
+# 0.025 C/min is 1.5 C/h: a fast solar afternoon, and still well clear of sensor noise.
+WARMING_TREND_C_PER_MIN = 0.025
+RISING_HUMIDITY_PCT = 0.15
+
 HUMIDITY_SENSITIVITY_LEVELS = ("tolerant", "normal", "sensitive", "very_sensitive")
 IONIZER_WITH_PURIFIER = "with_purifier"
 IONIZER_SURGE = "surge"
