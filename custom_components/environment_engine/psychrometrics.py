@@ -34,3 +34,16 @@ def feels_like(temp_c: float | None, relative_humidity: float | None, max_bump: 
     warmth = max(0.0, min((temp_c - 20.0) / 10.0, 1.0))                # 0 at 20 °C, 1 at 30 °C+
     bump = (excess_rh / 60.0) * warmth * max_bump
     return temp_c + min(bump, max_bump)
+
+
+
+
+
+
+def _saturation_pressure(temp_c):
+    """Saturation water-vapour pressure in Pa (ASHRAE, over liquid water)."""
+    import math
+    t = temp_c + 273.15
+    return math.exp(-5.8002206e3 / t + 1.3914993 - 4.8640239e-2 * t
+                    + 4.1764768e-5 * t ** 2 - 1.4452093e-8 * t ** 3
+                    + 6.5459673 * math.log(t))

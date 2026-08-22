@@ -6,6 +6,7 @@ from .const import (
     STRATEGY_COOLING, STRATEGY_DEHUMIDIFY, STRATEGY_HUMIDIFY, STRATEGY_IDLE, STRATEGY_MOLD_PREVENTION,
     STRATEGY_PASSIVE_VENTILATION, STRATEGY_SAFETY_STOP, STRATEGY_SOLAR_MITIGATION,
 )
+from .comfort import should_dehumidify
 from .decision import Decision
 from .evaluators import drying_pressure
 from .resolvers import resolve_climate, resolve_cover, resolve_fan, resolve_humidifier, resolve_purifier, resolve_ventilation
@@ -46,7 +47,7 @@ class Planner:
         )
 
         sleep = not snapshot.sun_up and snapshot.dark  # genuinely dark night
-        hvac_mode, target, climate_fan_speed, climate_driver = resolve_climate(snapshot, self.capabilities, self.options, evaluations, passive_cooling)
+        hvac_mode, target, climate_driver = resolve_climate(snapshot, self.capabilities, self.options, evaluations, passive_cooling)
         fan_action, fan_speed, fan_driver = resolve_fan(snapshot, self.capabilities, self.options, evaluations, passive_cooling, sleep)
         cover_action, cover_driver = resolve_cover(snapshot, self.capabilities, evaluations)
         purifier_action, purifier_speed, ionizer_action, purifier_driver = resolve_purifier(self.capabilities, self.options, evaluations, sleep)
@@ -56,9 +57,12 @@ class Planner:
         drivers = {d for d in (climate_driver, fan_driver, cover_driver, purifier_driver, humidifier_driver, ventilation_driver) if d}
         strategy = self._label(drivers, snapshot)
         confidence, reason = self._summary(strategy, evaluations)
-        return Decision(strategy, hvac_mode, target, fan_action, fan_speed, cover_action, purifier_action, confidence, reason, humidifier_action=humidifier_action, humidifier_target=humidifier_target, purifier_speed=purifier_speed, ionizer_action=ionizer_action, ventilation_action=ventilation_action, climate_fan_speed=climate_fan_speed)
+        return Decision(strategy, hvac_mode, target, fan_action, fan_speed, cover_action, purifier_action, confidence, reason, humidifier_action=humidifier_action, humidifier_target=humidifier_target, purifier_speed=purifier_speed, ionizer_action=ionizer_action, ventilation_action=ventilation_action)
 
     def _away(self, snapshot, evaluations) -> Decision:
+        # Shading is free and keeps the empty flat cooler for nothing, so blinds keep
+        # working while you are out.
+        cover_action, _cover_driver = resolve_cover(snapshot, self.capabilities, evaluations)
         managed = self.capabilities.climate and snapshot.climate_valid and snapshot.hvac_mode in _MANAGED
         hvac = HVAC_OFF if managed else None
         fan = ACTION_OFF if self.capabilities.fan else ACTION_NONE
@@ -72,7 +76,31 @@ class Planner:
             return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, ACTION_NONE, purifier, 1.0,
                             "sealing against outdoor air while away", purifier_speed=speed,
                             ionizer_action=ionizer, ventilation_action=vent)
-        return Decision(STRATEGY_AWAY_IDLE, hvac, None, fan, None, ACTION_NONE, ACTION_NONE, 1.0, "home is unoccupied", ventilation_action=vent)
+        # An empty flat is allowed to drift, but not without limit. Letting it bake to
+        # 31 C means you walk into a hot room and the unit then has to claw all of it
+        # back at once -- which costs more than never letting it get there. Cap the
+        # drift instead of idling unconditionally.
+        target = evaluations["target"].base_target if "target" in evaluations else int(self.options.target)
+        ceiling = target + self.options.away_max_drift
+        indoor = snapshot.indoor_temp
+        if (self.capabilities.climate and snapshot.climate_valid and snapshot.temperature_valid
+                and indoor is not None and self.options.away_max_drift > 0 and indoor > ceiling
+                and HVAC_COOL in snapshot.hvac_modes
+                and (not self.options.portable_ac or snapshot.vented)):
+            return Decision(STRATEGY_COOLING, HVAC_COOL, ceiling, fan, None, cover_action,
+                            ACTION_NONE, 1.0, "capping the heat in an empty home",
+                            ventilation_action=vent)
+
+        # Damp air does not care whether anyone is in. Mould grows regardless, so a wet
+        # empty flat still gets dried -- the same reasoning as sealing against smoke above.
+        if (self.capabilities.climate and self.capabilities.humidity and not self.capabilities.humidifier
+                and snapshot.climate_valid and HVAC_DRY in snapshot.hvac_modes
+                and should_dehumidify(snapshot, self.options, True)):
+            return Decision(STRATEGY_DEHUMIDIFY, HVAC_DRY, None, fan, None, cover_action,
+                            ACTION_NONE, 1.0, "drying an empty home to keep mould down",
+                            ventilation_action=vent)
+
+        return Decision(STRATEGY_AWAY_IDLE, hvac, None, fan, None, cover_action, ACTION_NONE, 1.0, "home is unoccupied", ventilation_action=vent)
 
     def _label(self, drivers, snapshot) -> str:
         for driver in _LABEL_PRIORITY:

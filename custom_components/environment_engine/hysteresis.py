@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
-from .const import ACTION_NONE, ACTION_OFF, ACTION_ON, HVAC_COOL, HVAC_DRY
+from .const import ACTION_NONE, ACTION_OFF, ACTION_ON, HVAC_COOL, HVAC_DRY, HVAC_OFF
 from .decision import Decision
 _MISSING = object()
 _SPEED_RANK = {"low": 1, "medium": 2, "high": 3}
@@ -39,7 +39,9 @@ class HysteresisEngine:
             return True
         return (datetime.now(timezone.utc) - last).total_seconds() >= minimum_interval
 
-    def apply(self, decision: Decision, minimum_interval: int, compressor_min_cycle: int = 0, device_min_cycle: int = 0) -> Decision:
+    def apply(self, decision: Decision, minimum_interval: int, compressor_min_cycle: int = 0,
+              device_min_cycle: int = 0, fan_only_mode: str | None = None,
+              coil_dry_out: int = 0) -> Decision:
         if not self._committed or decision.blocked:
             self._commit(decision)
             self.last_decision = decision
@@ -50,14 +52,41 @@ class HysteresisEngine:
         fan_speed = decision.fan_speed
         purifier_speed = decision.purifier_speed
         committed_fan = self._committed.get("fan", (ACTION_NONE, None))
-        if hvac_mode is not None and hvac_mode != self._committed.get("hvac") and not self._allowed("hvac", minimum_interval):
+        # Stopping is always allowed. The rate limiter exists to stop the engine flapping
+        # between modes, not to keep the compressor running past the point where the room
+        # has reached your setpoint -- holding "cool" here overcooled by up to a full
+        # min_change_interval. The fan and ventilation channels already exempt OFF; hvac
+        # did not, which contradicted the documented behaviour as well as the intent.
+        if (hvac_mode is not None and hvac_mode != HVAC_OFF
+                and hvac_mode != self._committed.get("hvac")
+                and not self._allowed("hvac", minimum_interval)):
             hvac_mode = self._committed.get("hvac")
         # Compressor anti-short-cycle: don't flip the compressor on<->off (cool/dry
         # vs anything else) more often than the minimum cycle time protects it.
         if compressor_min_cycle > 0 and hvac_mode is not None:
             committed_hvac = self._committed.get("hvac")
             if (hvac_mode in _COMPRESSOR) != (committed_hvac in _COMPRESSOR) and not self._allowed("compressor", compressor_min_cycle):
-                hvac_mode = committed_hvac
+                # The compressor is protected, but the unit does not have to sit there
+                # doing nothing for five minutes with the room above target. If it has a
+                # fan_only mode, move air while the timer runs -- it costs almost nothing,
+                # it destratifies the ceiling heat so the next cycle starts from an honest
+                # reading, and it is the difference between "waiting" and "ignoring you".
+                if (fan_only_mode is not None and hvac_mode in _COMPRESSOR
+                        and committed_hvac not in _COMPRESSOR):
+                    hvac_mode = fan_only_mode
+                else:
+                    hvac_mode = committed_hvac
+        # Coil dry-out. A coil that has just been condensing water is wet, and a wet coil
+        # sitting in a dark box is how a unit starts smelling. Running the blower for a
+        # couple of minutes after the compressor stops evaporates it -- this is what the
+        # manufacturers' own "auto clean" does. Only when the unit has a fan_only mode,
+        # and never when a safety block is active (that short-circuits above).
+        if (coil_dry_out > 0 and fan_only_mode is not None and hvac_mode == HVAC_OFF):
+            committed_hvac = self._committed.get("hvac")
+            if committed_hvac in _COMPRESSOR:
+                hvac_mode = fan_only_mode          # the compressor just stopped: start drying
+            elif committed_hvac == fan_only_mode and not self._allowed("compressor", coil_dry_out):
+                hvac_mode = fan_only_mode          # still inside the dry-out window
         if target != self._committed.get("target") and not self._allowed("target", minimum_interval):
             target = self._committed.get("target")
         if fan_action != ACTION_OFF and (fan_action, fan_speed) != committed_fan and not self._allowed("fan", minimum_interval):
@@ -70,10 +99,17 @@ class HysteresisEngine:
         ventilation_action = decision.ventilation_action
         if ventilation_action not in (ACTION_NONE, ACTION_OFF) and ventilation_action != self._committed.get("ventilation") and not self._allowed("ventilation", minimum_interval):
             ventilation_action = ACTION_NONE
-        # plain on/off channels share one rule
+        # Plain on/off channels share one rule, including the exemption: stopping is
+        # never rate-limited. Holding a device ON after its job is done is overshoot in
+        # every case -- a humidifier kept running past target raises the mould risk the
+        # engine exists to manage, an ionizer keeps making ozone, a purifier burns filter
+        # for nothing. Covers are unaffected: they use OPEN/CLOSE, never OFF, so their
+        # motors stay rate-limited for wear.
         gated = {}
         for channel, value in _simple_actions(decision):
-            if value != ACTION_NONE and value != self._committed.get(channel) and not self._allowed(channel, minimum_interval):
+            if (value != ACTION_NONE and value != ACTION_OFF
+                    and value != self._committed.get(channel)
+                    and not self._allowed(channel, minimum_interval)):
                 value = ACTION_NONE
             gated[channel] = value
         # Wear protection: don't start<->stop the purifier more often than device_min_cycle.

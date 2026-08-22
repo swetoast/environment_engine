@@ -9,7 +9,7 @@ from .adaptive_learning import AdaptiveLearning
 from .air_model import AirModel, speed_fraction
 from .thermal_model import ThermalModel
 from .capabilities import build_capabilities
-from .const import CONF_AQI, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY
+from .const import CONF_AQI, CONF_FAN, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY
 from .entities import as_list
 from .evaluators import evaluate_air_quality, evaluate_energy, evaluate_humidity, evaluate_mold, evaluate_safety, evaluate_solar, evaluate_thermal
 from .executors import EnvironmentExecutor
@@ -94,7 +94,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp)
         evaluations = self._evaluate(snapshot, memory)
         raw_decision = Planner(self.capabilities, self.options).plan(snapshot, evaluations)
-        decision = self.hysteresis.apply(raw_decision, self.options.min_change_interval, self.options.compressor_min_cycle, self.options.device_min_cycle)
+        fan_only_mode = HVAC_FAN_ONLY if HVAC_FAN_ONLY in snapshot.hvac_modes else None
+        decision = self.hysteresis.apply(raw_decision, self.options.min_change_interval, self.options.compressor_min_cycle, self.options.device_min_cycle, fan_only_mode, self.options.coil_dry_out)
         self.previous_snapshot = snapshot
         self.previous_decision = decision
         active = set()
@@ -410,6 +411,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # The exhaust hose is vented only via its OWN vent sensor or the manual switch --
             # a generic door/window contact must never imply the hose is vented.
             vented=self._any_on(CONF_VENT) or self.vent_override,
+            fan_running=self._any_on(CONF_FAN),
+            fan_available=not self._invalid(CONF_FAN),
             quiet=self.options.quiet_hours and in_quiet_hours(dt_util.now().time(), self.options.quiet_start, self.options.quiet_end),
             energy_price=self._mean(CONF_PRICE),
             price_average=self._mean(CONF_PRICE_AVERAGE),

@@ -2,6 +2,7 @@ from __future__ import annotations
 import dataclasses
 from homeassistant.components.sensor import RestoreSensor, SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.helpers.entity import EntityCategory
+from .comfort import pmv as _pmv, ppd as _ppd, sensation as _sensation
 from .const import DOMAIN
 from .entity import EnvironmentEngineEntity
 
@@ -160,7 +161,7 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
             attrs["comfort_target_c"] = t.base_target
             attrs["cooling_to_c"] = t.effective_target
             if t.precool:
-                attrs["precooling_by_c"] = round(t.precool, 1)
+                attrs["precooling_by_c"] = t.precool
         if s.feels_like is not None:
             attrs["feels_like_c"] = round(s.feels_like, 1)
         if t is not None and t.cooling_drop:
@@ -169,6 +170,13 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
             attrs["target_eased_by_c"] = t.relaxation
         if t is not None and (t.limited_by_min or t.limited_by_max):
             attrs["target_limited_by_device"] = "minimum" if t.limited_by_min else "maximum"
+        # Context, not control: how the room reads on the ISO 7730 comfort scale. This
+        # never picks a temperature -- it is here so you can see what the air is doing.
+        vote = _pmv(s.indoor_temp, s.humidity)
+        if vote is not None:
+            attrs["comfort"] = _sensation(vote)
+            attrs["comfort_vote"] = round(vote, 2)
+            attrs["people_uncomfortable_pct"] = round(_ppd(vote))
         attrs["room_holds_heat_pct"] = round(m.thermal_inertia * 100)
         attrs["expected_warming_c"] = round(self.coordinator._anticipation(s), 1)
         # What the learned thermal model knows about this room.

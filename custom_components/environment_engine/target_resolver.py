@@ -15,22 +15,24 @@ confidence bonus (whether to run) and energy stays both a confidence penalty and
 the relax term here (how hard), each capped so they don't compound past bounds.
 """
 from __future__ import annotations
+import math
 from dataclasses import dataclass
+from .comfort import humidity_penalty
 from .psychrometrics import dew_point
 
-_MAX_DROP = 3.0          # reactive (indoor heat + trend)
+_MAX_DROP = 1.5          # reactive (indoor heat + trend)
 _SOFTNESS = 3.0
 _TREND_DROP = 0.5
 _OUTDOOR_HOT = 25.0      # outdoor above this begins a small preemptive drop
 _OUTDOOR_SPAN = 10.0
-_MAX_OUTDOOR_DROP = 1.0
+_MAX_OUTDOOR_DROP = 1.0   # whole degrees: 0.5 rounds to nothing and the rule would be dead
 _MAX_PRECOOL = 1.5
-_MAX_RELAX = 3.0
+_MAX_RELAX = 2.0         # matches _MAX_CORRECTION: a bigger number here would be a lie
 _NIGHT_RELAX = 1.0
 _SLEEP_RELAX = 1.5
 _VENT_RELAX = 1.0
 _ENERGY_RELAX = 1.5
-_MAX_CORRECTION = 4.0
+_MAX_CORRECTION = 2.0    # never drive the setpoint more than this below your number
 
 
 @dataclass(slots=True)
@@ -49,7 +51,11 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+
+
 def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetResult:
+    # Your setpoint. Not a suggestion, not a starting point for a comfort model to
+    # improve on. Context below may only ever subtract from it.
     base = float(options.target)
     energy = evaluations.get("energy")
 
@@ -73,7 +79,15 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
 
     # Muggy comfort is now handled upstream by the feels-like temperature (a humid
     # room reads warmer to the thermal evaluator), so there is no separate target drop.
-    total_drop = reactive_drop + outdoor_drop + precool_drop
+    # Damp air makes the same temperature feel worse, so cool harder -- never sit higher.
+    # Whole degrees, because that is all the AC accepts.
+    damp_drop = float(humidity_penalty(snapshot.indoor_temp, snapshot.humidity,
+                                       options.humidity_sensitivity))
+    # Whole degrees, decided here rather than at the reporting step. The unit only accepts
+    # integers, so a 0.5 that survives into the arithmetic moves the setpoint a full degree
+    # while being reported as 0 -- which is how "drop 0" ended up sending 21 for a target
+    # of 22.
+    total_drop = min(round(reactive_drop + outdoor_drop + precool_drop + damp_drop), _MAX_CORRECTION)
 
     # --- relaxations (automatic eco / sleep / ventilation) ---
     relax = 0.0
@@ -95,7 +109,7 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
     if not sealed and snapshot.window_open and snapshot.outdoor_temp is not None and snapshot.outdoor_temp < snapshot.indoor_temp:
         relax += _VENT_RELAX
         factors.append("ventilation")
-    relaxation = min(relax, _MAX_RELAX)
+    relaxation = min(round(relax), _MAX_RELAX)
 
     raw = _clamp(base - total_drop + relaxation, base - _MAX_CORRECTION, base + _MAX_CORRECTION)
 
@@ -103,25 +117,35 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
     # AC would drive surfaces toward condensation. A humid (high dew point) room is
     # thus bounded here and left to dry/dehumidify, which lowers the dew point and
     # unlocks deeper cooling next cycle.
+    # The guard exists so the engine does not chase a setpoint so far below the room's dew
+    # point that surfaces sweat. It must NOT be able to raise the setpoint above the number
+    # you asked for: on a hot, humid day the dew point can sit above your target, and the
+    # old unbounded version then sent the HIGHEST setpoint the unit allowed -- 30 C at
+    # 33 C/85% -- so the room got neither cooling nor drying, exactly when it needed both.
+    # Cooling toward your setpoint is always allowed; the coil dehumidifies on the way and
+    # the dew point falls with it.
     dew = dew_point(snapshot.indoor_temp, snapshot.humidity)
     dew_floor = None
     pre_dew = raw
     if dew is not None and options.dewpoint_margin > 0:
-        dew_floor = dew + options.dewpoint_margin
+        dew_floor = min(dew + options.dewpoint_margin, base)
         raw = max(raw, dew_floor)
 
     low = snapshot.min_temp if snapshot.min_temp is not None else 16.0
     high = snapshot.max_temp if snapshot.max_temp is not None else 30.0
     clamped = _clamp(raw, low, high)
-    effective = int(round(clamped))
+    # Floor, never round. 24.5 sends 24, not 25: when the choice is between two whole
+    # degrees the colder one is always the right side to err on here. Rounding also
+    # chatters on sensor noise at the .5 boundary, re-sending the setpoint for nothing.
+    effective = int(math.floor(clamped + 1e-9))
     dew_limited = dew_floor is not None and raw > pre_dew + 0.01
 
-    if effective < int(round(base)):
+    if effective < int(base):
         if precool_drop > 0 and precool_drop >= max(reactive_drop, outdoor_drop):
             reason = "pre-cooling ahead of forecast heat while power is cheap"
         else:
             reason = "lowered setpoint for heat load"
-    elif effective > int(round(base)):
+    elif effective > int(base):
         reason = "relaxed setpoint for " + ", ".join(factors) if factors else "relaxed setpoint"
     else:
         reason = "holding baseline setpoint"
@@ -129,12 +153,12 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
         reason += " (held above dew point to avoid condensation)"
 
     return TargetResult(
-        base_target=int(round(base)),
+        base_target=int(base),
         effective_target=effective,
         reason=reason,
-        cooling_drop=round(total_drop, 2),
-        relaxation=round(relaxation, 2),
-        precool=round(precool_drop, 2),
+        cooling_drop=int(total_drop),
+        relaxation=int(relaxation),
+        precool=int(precool_drop),
         limited_by_min=clamped <= low,
         limited_by_max=clamped >= high,
     )

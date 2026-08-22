@@ -20,12 +20,19 @@ def evaluate_solar(snapshot, options) -> SolarResult:
         if snapshot.sun_elevation is not None and snapshot.sun_elevation < 30:
             threshold *= max(0.5, snapshot.sun_elevation / 30.0)
         lux_shade = snapshot.lux >= threshold
-    shading = heat >= 0.35 or lux_shade
-    if lux_shade:
+    # Bright light on its own is not a reason to shut the blinds. On a 13 C day the sun
+    # can be blazing while the flat needs no protection at all -- closing then just makes
+    # the room dark for nothing. Glare only counts once the outdoors is actually warm
+    # enough for the gain to matter, and real heat load shades regardless of measured light.
+    warm_enough = heat >= 0.15
+    shading = heat >= 0.35 or (lux_shade and warm_enough)
+    if lux_shade and warm_enough:
         low = snapshot.sun_elevation is not None and snapshot.sun_elevation < 30
         reason = "low-angle sun glare; shading early" if low else "measured light is high; shading reduces glare and gain"
     elif heat >= 0.35:
         reason = "solar heat load supports shading"
+    elif lux_shade:
+        reason = "bright, but it is too cool outside for the gain to matter"
     else:
         reason = "solar load is low"
     return SolarResult(heat, shading, reason)

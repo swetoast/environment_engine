@@ -55,6 +55,9 @@ OPT_QUIET_START = "quiet_start"
 OPT_QUIET_END = "quiet_end"
 OPT_QUIET_MAX_TEMP = "quiet_max_temp"
 OPT_IONIZER_MODE = "ionizer_mode"
+OPT_HUMIDITY_SENSITIVITY = "humidity_sensitivity"
+OPT_AWAY_MAX_DRIFT = "away_max_drift"
+OPT_COIL_DRY_OUT = "coil_dry_out"
 OPT_OUTDOOR_AQI_THRESHOLD = "outdoor_aqi_threshold"
 OPT_DEWPOINT_MARGIN = "dewpoint_margin"
 OPT_LIGHTNING_DISTANCE = "lightning_distance"
@@ -73,6 +76,7 @@ STRATEGY_HUMIDIFY = "humidify"
 STRATEGY_AIR_CIRCULATION = "air_circulation"
 STRATEGY_QUIET_COOLING = "quiet_cooling"
 STRATEGY_AWAY_IDLE = "away_idle"
+HUMIDITY_SENSITIVITY_LEVELS = ("tolerant", "normal", "sensitive", "very_sensitive")
 IONIZER_WITH_PURIFIER = "with_purifier"
 IONIZER_SURGE = "surge"
 IONIZER_NEVER = "never"
@@ -117,6 +121,9 @@ DEFAULTS = {
     OPT_QUIET_END: "07:00",
     OPT_QUIET_MAX_TEMP: 26.0,
     OPT_IONIZER_MODE: IONIZER_WITH_PURIFIER,
+    OPT_HUMIDITY_SENSITIVITY: "normal",
+    OPT_AWAY_MAX_DRIFT: 4,
+    OPT_COIL_DRY_OUT: 120,
     OPT_OUTDOOR_AQI_THRESHOLD: 100,
     OPT_DEWPOINT_MARGIN: 2.0,
     OPT_LIGHTNING_DISTANCE: 40,

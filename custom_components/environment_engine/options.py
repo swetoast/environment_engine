@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
-from .const import DEFAULTS, IONIZER_NEVER, IONIZER_SURGE, IONIZER_WITH_PURIFIER, PRICING_FIXED, PRICING_SPOT, OPT_AIR_RECOVERY, OPT_AQI_THRESHOLD, OPT_FILTER_LIFE, OPT_PORTABLE_AC, OPT_PRICING_MODE, OPT_VENT_REVERT, OPT_PRESENCE_HOLD, OPT_CO2_THRESHOLD, OPT_LUX_THRESHOLD, OPT_PRICE_HIGH, OPT_HUMIDITY_COMFORT, OPT_CO2_VENTILATE, OPT_COMPRESSOR_MIN_CYCLE, OPT_DEVICE_MIN_CYCLE, OPT_QUIET_HOURS, OPT_QUIET_START, OPT_QUIET_END, OPT_QUIET_MAX_TEMP, OPT_IONIZER_MODE, OPT_DEWPOINT_MARGIN, OPT_LIGHTNING_DISTANCE, OPT_FAN_COMFORT, OPT_OUTDOOR_AQI_THRESHOLD, OPT_PM10_THRESHOLD, OPT_PM25_THRESHOLD, OPT_SLEEP_LUX, OPT_HUMIDITY_COOLING, OPT_TARGET_HUMIDITY, OPT_TARGET_TEMPERATURE, OPT_VOC_THRESHOLD
+from .const import DEFAULTS, HUMIDITY_SENSITIVITY_LEVELS, IONIZER_NEVER, IONIZER_SURGE, IONIZER_WITH_PURIFIER, PRICING_FIXED, PRICING_SPOT, OPT_AIR_RECOVERY, OPT_AQI_THRESHOLD, OPT_FILTER_LIFE, OPT_PORTABLE_AC, OPT_PRICING_MODE, OPT_VENT_REVERT, OPT_PRESENCE_HOLD, OPT_CO2_THRESHOLD, OPT_LUX_THRESHOLD, OPT_PRICE_HIGH, OPT_HUMIDITY_COMFORT, OPT_CO2_VENTILATE, OPT_COMPRESSOR_MIN_CYCLE, OPT_DEVICE_MIN_CYCLE, OPT_QUIET_HOURS, OPT_QUIET_START, OPT_QUIET_END, OPT_QUIET_MAX_TEMP, OPT_IONIZER_MODE, OPT_HUMIDITY_SENSITIVITY, OPT_AWAY_MAX_DRIFT, OPT_COIL_DRY_OUT, OPT_DEWPOINT_MARGIN, OPT_LIGHTNING_DISTANCE, OPT_FAN_COMFORT, OPT_OUTDOOR_AQI_THRESHOLD, OPT_PM10_THRESHOLD, OPT_PM25_THRESHOLD, OPT_SLEEP_LUX, OPT_HUMIDITY_COOLING, OPT_TARGET_HUMIDITY, OPT_TARGET_TEMPERATURE, OPT_VOC_THRESHOLD
 @dataclass(slots=True)
 class EngineOptions:
     auto_apply: bool = False
@@ -37,6 +37,9 @@ class EngineOptions:
     quiet_end: str = "07:00"
     quiet_max_temp: float = 26.0
     ionizer_mode: str = "with_purifier"
+    humidity_sensitivity: str = "normal"
+    away_max_drift: int = 4
+    coil_dry_out: int = 120
     @property
     def target(self) -> int:
         # One comfort baseline. The engine derives eco/sleep/away behaviour itself
@@ -53,6 +56,10 @@ def _time_str(value, default: str) -> str:
     from .quiet_hours import parse_time
     parsed = parse_time(value)
     return parsed.strftime("%H:%M") if parsed is not None else default
+
+
+def _clamp_float(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _as_float(value: Any, default: float) -> float:
@@ -81,7 +88,9 @@ def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOpt
         compressor_min_cycle=max(_as_int(merged.get(OPT_COMPRESSOR_MIN_CYCLE), DEFAULTS[OPT_COMPRESSOR_MIN_CYCLE]), 0),
         outdoor_aqi_threshold=max(_as_int(merged.get(OPT_OUTDOOR_AQI_THRESHOLD), DEFAULTS[OPT_OUTDOOR_AQI_THRESHOLD]), 1),
         dewpoint_margin=min(max(_as_float(merged.get(OPT_DEWPOINT_MARGIN), DEFAULTS[OPT_DEWPOINT_MARGIN]), 0.0), 6.0),
-        lightning_distance=max(_as_int(merged.get(OPT_LIGHTNING_DISTANCE), DEFAULTS[OPT_LIGHTNING_DISTANCE]), 1),
+        # Clamped to the model's reaction radius: offering 100 km in the UI while the
+        # hold silently caps at 40 would be a promise the engine cannot keep.
+        lightning_distance=min(max(_as_int(merged.get(OPT_LIGHTNING_DISTANCE), DEFAULTS[OPT_LIGHTNING_DISTANCE]), 1), 40),
         air_recovery=max(_as_int(merged.get(OPT_AIR_RECOVERY), DEFAULTS[OPT_AIR_RECOVERY]), 0),
         presence_hold=max(_as_int(merged.get(OPT_PRESENCE_HOLD), DEFAULTS[OPT_PRESENCE_HOLD]), 0),
         filter_life=max(_as_int(merged.get(OPT_FILTER_LIFE), DEFAULTS[OPT_FILTER_LIFE]), 0),
@@ -93,6 +102,9 @@ def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOpt
         quiet_start=_time_str(merged.get(OPT_QUIET_START), DEFAULTS[OPT_QUIET_START]),
         quiet_end=_time_str(merged.get(OPT_QUIET_END), DEFAULTS[OPT_QUIET_END]),
         quiet_max_temp=_as_float(merged.get(OPT_QUIET_MAX_TEMP), DEFAULTS[OPT_QUIET_MAX_TEMP]),
+        coil_dry_out=max(_as_int(merged.get(OPT_COIL_DRY_OUT), DEFAULTS[OPT_COIL_DRY_OUT]), 0),
+        away_max_drift=max(_as_int(merged.get(OPT_AWAY_MAX_DRIFT), DEFAULTS[OPT_AWAY_MAX_DRIFT]), 0),
+        humidity_sensitivity=(merged.get(OPT_HUMIDITY_SENSITIVITY) if merged.get(OPT_HUMIDITY_SENSITIVITY) in HUMIDITY_SENSITIVITY_LEVELS else DEFAULTS[OPT_HUMIDITY_SENSITIVITY]),
         ionizer_mode=(merged.get(OPT_IONIZER_MODE) if merged.get(OPT_IONIZER_MODE) in (IONIZER_WITH_PURIFIER, IONIZER_SURGE, IONIZER_NEVER) else DEFAULTS[OPT_IONIZER_MODE]),
         co2_ventilate=max(_as_int(merged.get(OPT_CO2_VENTILATE), DEFAULTS[OPT_CO2_VENTILATE]), 400),
         sleep_lux=max(_as_int(merged.get(OPT_SLEEP_LUX), DEFAULTS[OPT_SLEEP_LUX]), 0),

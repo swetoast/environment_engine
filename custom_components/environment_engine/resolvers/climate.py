@@ -1,73 +1,104 @@
 from __future__ import annotations
-from ..confidence import speed_tier
-from ..evaluators import drying_pressure
+from ..comfort import dehumidify_satisfied, should_dehumidify
 from ..const import (
     HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, HVAC_OFF,
     STRATEGY_AIR_CIRCULATION, STRATEGY_COOLING, STRATEGY_DEHUMIDIFY,
     STRATEGY_MOLD_PREVENTION, STRATEGY_PASSIVE_VENTILATION, STRATEGY_QUIET_COOLING,
 )
-# Modes the engine actively manages. It stands these down when there is no
-# demand, but never touches modes it does not manage (e.g. heat), so it won't
-# fight a heating setup in winter.
+
+# Modes the engine actively manages. It stands these down when there is no demand, but
+# never touches modes it does not manage (e.g. heat), so it won't fight a heating setup.
 _MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
 
 
 def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
-    """Decide the climate actuator alone. Returns (hvac_mode|None, target|None, fan_speed|None, driver|None).
+    """Decide the climate actuator. Returns (hvac_mode|None, target|None, driver|None).
 
-    hvac_mode is None when the engine should not touch the climate at all (no
-    climate, climate offline, or a mode it does not manage).
+    The rule this file exists to enforce: **above the setpoint means cool.** Not humidity,
+    not price, not a comfort model, not a fan that could theoretically make the room feel
+    adequate -- none of them get to override that. The only thing that outranks it is safety.
 
-    Two things can hold the compressor back:
-      * a portable AC whose exhaust isn't vented (it would dump condenser heat indoors);
-      * quiet hours, where the noise of the compressor isn't wanted -- unless the room has
-        passed the "too hot" line, in which case comfort wins and it cools anyway.
-    When the compressor is held back the unit falls back to its own fan_only to keep air
-    moving. Outside quiet hours the AC only fans when there's no standalone fan to do it,
-    so the two don't double up.
+    Everything else is context, and context may only make the engine cool *harder*, by
+    lowering the setpoint upstream in target_resolver. It never gets to decide the room is
+    fine when the thermometer says otherwise.
+
+        1. safety blocked                    -> OFF            (handled by the planner)
+        2. temperature reading invalid       -> hold, touch nothing
+        3. above setpoint, cooling available -> COOL
+           above setpoint, cooling blocked   -> FAN_ONLY, keep air moving while blocked
+        4. at setpoint but air too wet       -> DRY
+        5. circulation wanted                -> FAN_ONLY
+        6. otherwise                         -> OFF
     """
     if not capabilities.climate or not snapshot.climate_valid:
-        return None, None, None, None
+        return None, None, None
     if not snapshot.temperature_valid:
-        # The temperature sensor is missing or offline, so the room reading is a
-        # placeholder, not a measurement. Don't act on it: standing the unit down here
-        # would turn the AC off on a momentary sensor blip (and then anti-short-cycling
-        # would delay the restart). Leave the unit alone -- it has its own thermostat and
-        # keeps regulating to the setpoint we last gave it.
-        return None, None, None, None
+        # The reading is a placeholder, not a measurement. Acting on it would turn a
+        # happily-cooling unit off on a momentary sensor blip, and anti-short-cycling
+        # would then delay the restart. The AC has its own thermostat; leave it be.
+        return None, None, None
+
     modes = snapshot.hvac_modes
-    thermal = ev["thermal"]
     mold = ev["mold"]
-    drying = drying_pressure(ev)
+    # Two different numbers, deliberately:
+    #   base   -- the temperature YOU asked for. Decides whether the room is too warm.
+    #   target -- that, minus context (heat, sun, damp air, cheap power). Decides how
+    #             hard to drive the unit once it is running.
+    # Testing "too warm" against the driven-down number would be circular: the damp
+    # penalty would lower the setpoint, that would make the room "above target", and DRY
+    # could never fire because cooling always won.
+    base = ev["target"].base_target if "target" in ev else int(options.target)
+    target = ev["target"].effective_target if "target" in ev else int(options.target)
+    indoor = snapshot.indoor_temp
+    above_target = indoor is not None and indoor > base
 
-    temp = snapshot.feels_like if snapshot.feels_like is not None else snapshot.indoor_temp
-    too_hot_to_stay_quiet = temp is not None and temp >= options.quiet_max_temp
-    quiet = snapshot.quiet and not too_hot_to_stay_quiet  # hold the compressor back
+    # What can stop the compressor -- note that "the room is comfortable" is not on the list.
     vented_ok = not options.portable_ac or snapshot.vented
+    temp = snapshot.feels_like if snapshot.feels_like is not None else indoor
+    too_hot_to_stay_quiet = temp is not None and temp >= options.quiet_max_temp
+    quiet = snapshot.quiet and not too_hot_to_stay_quiet
     can_cool = vented_ok and not quiet
-    # During quiet hours the AC's own fan is the point, so it may fan even alongside a
-    # standalone fan; otherwise it defers to the standalone fan to avoid double-fanning.
-    ac_fan_ok = HVAC_FAN_ONLY in modes and (quiet or not capabilities.fan)
 
-    if can_cool and capabilities.humidity and not capabilities.humidifier and drying > thermal.confidence and drying >= 0.3 and HVAC_DRY in modes:
-        return HVAC_DRY, None, None, STRATEGY_DEHUMIDIFY
-    if thermal.confidence >= 0.3:
-        speed = speed_tier(thermal.confidence, 0.8, 0.5)  # push more air the hotter it is
+    # The AC's own fan_only is useful when it is the room's only air mover, or when quiet
+    # hours mean it is standing in for the compressor. A standalone fan that is configured
+    # but offline is not an air mover, so the AC takes over rather than both sitting idle
+    # and leaving the room still.
+    standalone_fan = capabilities.fan and snapshot.fan_available
+    ac_fan_ok = HVAC_FAN_ONLY in modes and (quiet or not standalone_fan)
+
+    # --- 3. Above the setpoint: cool, or keep air moving if the compressor is blocked ---
+    if above_target:
+        # Free cooling first: if the outside air is doing the work through an open
+        # window, spending compressor energy on top of it is just waste.
         if passive_cooling and HVAC_FAN_ONLY in modes:
-            return HVAC_FAN_ONLY, None, speed, STRATEGY_PASSIVE_VENTILATION
+            return HVAC_FAN_ONLY, None, STRATEGY_PASSIVE_VENTILATION
         if can_cool and HVAC_COOL in modes:
-            target = ev["target"].effective_target if "target" in ev else options.target
-            return HVAC_COOL, target, speed, STRATEGY_COOLING
-        # Cooling is held back (quiet hours, or portable + unvented): keep air moving.
+            return HVAC_COOL, target, STRATEGY_COOLING
         if ac_fan_ok:
-            # In quiet hours keep it gentle; otherwise match the heat.
-            fan_speed = "low" if quiet else speed
-            return HVAC_FAN_ONLY, None, fan_speed, (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
-    # Gentle circulation via the AC when it's the only air mover in the room.
-    if ac_fan_ok and options.fan_comfort and thermal.confidence >= 0.15:
-        return HVAC_FAN_ONLY, None, "low", (STRATEGY_QUIET_COOLING if quiet else STRATEGY_AIR_CIRCULATION)
+            return HVAC_FAN_ONLY, None, (STRATEGY_QUIET_COOLING if quiet
+                                               else STRATEGY_AIR_CIRCULATION)
+        if standalone_fan:
+            # A standalone fan is the better air mover and the fan resolver drives it;
+            # two fans in one room is just noise.
+            return (HVAC_OFF if snapshot.hvac_mode in _MANAGED else None), None, None
+
+    # --- 4. At or below the setpoint, but the air is too wet ---
+    elif capabilities.humidity and not capabilities.humidifier and HVAC_DRY in modes:
+        already_drying = snapshot.hvac_mode == HVAC_DRY
+        if already_drying and not dehumidify_satisfied(snapshot, options):
+            return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
+        if not already_drying and should_dehumidify(snapshot, options, True):
+            return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
+
+    # --- 5. Circulation ---
+    # Passive ventilation is a *cooling* strategy, so it lives inside the above-target
+    # branch above. A room that is already cool does not need the window's help.
+    if ac_fan_ok and options.fan_comfort and above_target:
+        return HVAC_FAN_ONLY, None, STRATEGY_AIR_CIRCULATION
     if mold.airflow_recommended and ac_fan_ok:
-        return HVAC_FAN_ONLY, None, "low", STRATEGY_MOLD_PREVENTION
+        return HVAC_FAN_ONLY, None, STRATEGY_MOLD_PREVENTION
+
+    # --- 6. Nothing to do ---
     if snapshot.hvac_mode in _MANAGED:
-        return HVAC_OFF, None, None, None
-    return None, None, None, None
+        return HVAC_OFF, None, None
+    return None, None, None

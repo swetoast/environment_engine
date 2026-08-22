@@ -25,7 +25,9 @@ def resolve_fan(snapshot, capabilities, options, ev, passive_cooling, sleep=Fals
 
 
 def _decide_fan(snapshot, capabilities, options, thermal, mold, air_quality, passive_cooling):
-    # Cooling demand -> circulate (and boost an actively cooling AC).
+    # Cooling demand -> circulate (and boost an actively cooling AC). When the comfort
+    # model is available it picks the speed, because more airflow is not automatically
+    # better: past the point of comfort it just makes the room draughty and noisy.
     if thermal.confidence >= 0.3:
         return ACTION_ON, speed_tier(thermal.confidence, 0.8, 0.5), STRATEGY_AIR_CIRCULATION
     # Assist air cleaning whenever air quality is elevated enough to run the

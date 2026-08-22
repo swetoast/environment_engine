@@ -1,13 +1,14 @@
 from __future__ import annotations
 import logging
 from homeassistant.const import ATTR_ENTITY_ID
-from ..const import CONF_CLIMATE, HVAC_COOL, HVAC_FAN_ONLY, HVAC_OFF
-from ..presets import preset_for_speed
+from ..const import CONF_CLIMATE, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, HVAC_OFF
 from ..entities import as_list
 from ..features import climate_features
 from ..units import from_celsius
 from .common import controllable, is_assumed
 _LOGGER = logging.getLogger(__name__)
+# Modes the engine manages; it only stands these down, never a mode it does not drive.
+_MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
 async def apply_climate(hass, config: dict, snapshot, decision) -> bool:
     if decision.hvac_mode is None:
         return True
@@ -31,20 +32,24 @@ async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
             elif feats.turn_off:
                 await hass.services.async_call("climate", "turn_off", {ATTR_ENTITY_ID: entity_id}, blocking=True)
             return True
-        if decision.hvac_mode not in modes:  # this unit doesn't support the mode
+        if decision.hvac_mode not in modes:
+            # The unit cannot do what was asked -- fan_only on a model without it, say.
+            # Returning here would leave it in whatever it was doing, which may well be
+            # cooling, so the engine would have decided "stop cooling" and the AC would
+            # carry on. Stand it down instead; that is the safe reading of "not this".
+            if state.state in _MANAGED and HVAC_OFF in modes:
+                await hass.services.async_call("climate", "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": HVAC_OFF}, blocking=True)
             return True
         if assumed or state.state != decision.hvac_mode:
             await hass.services.async_call("climate", "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": decision.hvac_mode}, blocking=True)
-        # When we run the unit for airflow (fan_only, or a cooling boost), actually set the
-        # fan speed. Otherwise the AC stays on whatever it had -- usually 'auto'/'quiet' --
-        # and "circulate to shed heat" barely moves any air. Map our tier onto the unit's
-        # own fan modes; skip if it has none or is already there.
-        if decision.hvac_mode in (HVAC_FAN_ONLY, HVAC_COOL) and decision.climate_fan_speed and feats.fan_mode:
-            desired = preset_for_speed(state.attributes.get("fan_modes"), decision.climate_fan_speed)
-            if desired is not None and (assumed or state.attributes.get("fan_mode") != desired):
-                await hass.services.async_call("climate", "set_fan_mode", {ATTR_ENTITY_ID: entity_id, "fan_mode": desired}, blocking=True)
         if decision.hvac_mode == HVAC_COOL and decision.target_temperature is not None and feats.target_temperature:
-            target = round(float(from_celsius(float(decision.target_temperature), snapshot.temperature_unit)), 1)
+            # Floor in the unit's own scale. We choose a whole degree in Celsius, but a
+            # Fahrenheit unit converts 22 C to 71.6 F -- a fraction the AC cannot accept,
+            # so the whole-degree guarantee would be lost at the very last step. Floor
+            # again here, and downward, so the conversion can only ever land colder.
+            import math
+            converted = float(from_celsius(float(decision.target_temperature), snapshot.temperature_unit))
+            target = float(math.floor(converted + 1e-9))
             dmin, dmax = state.attributes.get("min_temp"), state.attributes.get("max_temp")
             if dmin is not None:
                 target = max(target, float(dmin))

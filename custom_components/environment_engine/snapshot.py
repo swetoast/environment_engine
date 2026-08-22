@@ -25,6 +25,8 @@ class Snapshot:
     portable_ac: bool = False
     vented: bool = False
     quiet: bool = False
+    fan_running: bool = False
+    fan_available: bool = True
     cover_closed: bool = False
     lux: float | None = None
     humidifier_class: str | None = None

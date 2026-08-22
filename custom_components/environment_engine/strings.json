@@ -256,7 +256,10 @@
           "quiet_start": "Quiet hours start",
           "quiet_end": "Quiet hours end",
           "quiet_max_temp": "Cool anyway above (°C)",
-          "ionizer_mode": "Ionizer"
+          "ionizer_mode": "Ionizer",
+          "humidity_sensitivity": "Humidity sensitivity",
+          "away_max_drift": "Let an empty home drift up to (°C above target)",
+          "coil_dry_out": "Dry the coil after cooling (seconds)"
         },
         "data_description": {
           "auto_apply": "When off, the engine shows what it would do without touching any device.",
@@ -284,7 +287,10 @@
           "quiet_start": "When the quiet window begins (it may run past midnight).",
           "quiet_end": "When the quiet window ends.",
           "quiet_max_temp": "Comfort override: if the room (feels-like) reaches this temperature during quiet hours, the compressor runs anyway rather than let you cook. Set high to keep quiet hours strict.",
-          "ionizer_mode": "When the ionizer runs. 'With the purifier' turns it on whenever the purifier runs; 'Only on heavy pollution' saves it for a strong surge; 'Never' leaves it off."
+          "ionizer_mode": "When the ionizer runs. 'With the purifier' turns it on whenever the purifier runs; 'Only on heavy pollution' saves it for a strong surge; 'Never' leaves it off.",
+          "humidity_sensitivity": "How much damp air bothers you. The comfort model includes humidity but underweights it — it will call 25 °C at 90% comfortable when the dew point is 23 °C and the room is clammy. This sets the dew-point line at which the engine starts dehumidifying regardless of temperature.",
+          "away_max_drift": "How far above your target an unoccupied room may get before the engine caps it. Letting it bake means you walk into a hot flat and the unit has to claw it all back at once, which costs more than never letting it get there. Set 0 to let it drift without limit.",
+          "coil_dry_out": "After cooling or dehumidifying stops, run the fan briefly to evaporate the water left on the coil — a wet coil sitting in a dark box is how an air conditioner starts to smell. This is what the manufacturers' own 'auto clean' does. Set 0 to switch it off."
         }
       }
     }
@@ -301,6 +307,14 @@
         "with_purifier": "With the purifier",
         "surge": "Only on heavy pollution",
         "never": "Never"
+      }
+    },
+    "humidity_sensitivity": {
+      "options": {
+        "tolerant": "Tolerant (dew point 17 °C)",
+        "normal": "Normal (15 °C)",
+        "sensitive": "Sensitive (13 °C)",
+        "very_sensitive": "Very sensitive (11 °C)"
       }
     }
   }
