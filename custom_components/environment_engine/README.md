@@ -26,7 +26,7 @@ winter.
 
 ## Requirements
 
-- Home Assistant **2024.6** or newer (the config flow uses collapsible sections)
+- Home Assistant 2024.6 or newer
 - At least one climate, fan or purifier entity to control
 - No external dependencies, no cloud, no API keys
 
@@ -35,7 +35,7 @@ winter.
 ### HACS (recommended)
 
 1. In HACS, go to **Integrations → ⋮ → Custom repositories**.
-2. Add `https://github.com/swetoast/environment-engine` as an **Integration**.
+2. Add `https://github.com/swetoast/environment_engine` as an **Integration**.
 3. Search for **Environment Engine** and install it.
 4. Restart Home Assistant.
 
@@ -194,5 +194,5 @@ See the `LICENSE` file in the repository.
 
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg
 [hacs-url]: https://github.com/hacs/integration
-[release-badge]: https://img.shields.io/github/v/release/swetoast/environment-engine
-[release-url]: https://github.com/swetoast/environment-engine/releases
+[release-badge]: https://img.shields.io/github/v/release/swetoast/environment_engine
+[release-url]: https://github.com/swetoast/environment_engine/releases
