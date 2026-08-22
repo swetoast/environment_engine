@@ -1,7 +1,6 @@
 # Environment Engine
 
 [![hacs][hacs-badge]][hacs-url]
-[![release][release-badge]][release-url]
 
 An autonomous climate, air-quality and humidity controller for Home Assistant.
 
