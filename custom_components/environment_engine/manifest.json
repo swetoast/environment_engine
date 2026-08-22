@@ -1,7 +1,7 @@
 {
   "domain": "environment_engine",
   "name": "Environment Engine",
-  "version": "2.50.5",
+  "version": "2.52.0",
   "config_flow": true,
   "documentation": "https://github.com/swetoast/environment-engine",
   "issue_tracker": "https://github.com/swetoast/environment-engine/issues",

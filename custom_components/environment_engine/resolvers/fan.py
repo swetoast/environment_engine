@@ -30,6 +30,7 @@ def _decide_fan(snapshot, capabilities, options, thermal, mold, air_quality, pas
     # better: past the point of comfort it just makes the room draughty and noisy.
     if thermal.confidence >= 0.3:
         return ACTION_ON, speed_tier(thermal.confidence, 0.8, 0.5), STRATEGY_AIR_CIRCULATION
+
     # Assist air cleaning whenever air quality is elevated enough to run the
     # purifier (fan-follows-purifier), not just at the higher fan-only bar.
     if capabilities.air_quality and air_quality.purifier_recommended:

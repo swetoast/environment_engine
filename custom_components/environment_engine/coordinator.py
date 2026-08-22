@@ -140,7 +140,18 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.executor.apply(snapshot if snapshot is not None else self.data["snapshot"], decision if decision is not None else self.data["decision"])
 
     def reset_learning(self) -> None:
+        """Forget everything the engine has learned about this room.
+
+        Resets all three learners, not just the drying counter -- the button says "Reset
+        Learning", and leaving the fitted thermal and air models in place would make it a
+        lie. The persisted copy is overwritten too, otherwise the old fit would simply
+        come back on the next restart.
+        """
         self.learning.reset()
+        self.thermal = ThermalModel()
+        self.air = AirModel()
+        self._save_model()
+        _LOGGER.debug("Learning reset: thermal model, air model and drying counters cleared")
 
     def unload(self) -> None:
         remove = getattr(self, "_remove_auto_apply_listener", None)
