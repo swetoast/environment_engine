@@ -262,6 +262,36 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 reasons.append(f"{eid} ({state.state})")
         return reasons
 
+    @staticmethod
+    def _parse_dt(value):
+        if value is None:
+            return None
+        try:
+            return dt_util.parse_datetime(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _outdoor_aqi_soon(self):
+        """The worst outdoor AQI expected over the next few hours, from the sensor's own
+        hourly_forecast. Lets the engine air the place out *before* outdoor air turns bad,
+        rather than only reacting once a seal is already needed."""
+        horizon = dt_util.utcnow().timestamp() + 4 * 3600
+        worst = None
+        for s in self._usable(self._states(CONF_OUTDOOR_AQI)):
+            for item in (self._attr(s, "hourly_forecast") or []):
+                when = self._parse_dt(item.get("datetime")) if isinstance(item, dict) else None
+                value = self._as_float(item.get("value")) if isinstance(item, dict) else None
+                if when is not None and value is not None and when.timestamp() <= horizon:
+                    worst = value if worst is None else max(worst, value)
+        return worst
+
     def _forecast_high(self, system_unit):
         """Highest upcoming peak across all configured forecast/weather sources."""
         peaks = []
@@ -385,9 +415,21 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         indoor = self._mean(CONF_TEMPERATURE, temperature=True)
         climates = self._usable(self._states(CONF_CLIMATE))
         climate_valid = bool(climates)
-        if indoor is None and climates:
-            temps = [t for s in climates if (t := self._celsius_attr(s, "current_temperature", system_unit)) is not None]
-            indoor = sum(temps) / len(temps) if temps else None
+        unit_temps = [t for s in climates if (t := self._celsius_attr(s, "current_temperature", system_unit)) is not None]
+        unit_indoor = sum(unit_temps) / len(unit_temps) if unit_temps else None
+        if indoor is None:
+            indoor = unit_indoor
+
+        # How far the unit's own sensor sits from the room sensor. This matters more than
+        # it looks: the engine decides against YOUR sensor, but once a setpoint is sent the
+        # unit regulates against ITS OWN -- usually at the intake, near the ceiling, where
+        # air is warmest. So the room settles roughly `offset` colder than the number asked
+        # for. It is not compensated automatically, because the gap moves with airflow and
+        # stratification and guessing at it could overshoot the other way; it is reported so
+        # the discrepancy is visible instead of silently costing a couple of degrees.
+        sensor_offset = None
+        if indoor is not None and unit_indoor is not None and self._mean(CONF_TEMPERATURE, temperature=True) is not None:
+            sensor_offset = round(unit_indoor - indoor, 1)
 
         # combined climate capability: only command what EVERY unit supports
         if climates:
@@ -437,6 +479,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             aqi=aqi_value,
             aqi_dominant_factor=aqi_dominant,
             outdoor_aqi=self._max(CONF_OUTDOOR_AQI),
+            outdoor_aqi_soon=self._outdoor_aqi_soon(),
             pm25=self._max(CONF_PM25),
             pm10=self._max(CONF_PM10),
             dark=(lux := self._max(CONF_LUX)) is not None and self.options.sleep_lux > 0 and lux <= self.options.sleep_lux,
@@ -456,6 +499,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lightning_band=lightning_band(lc) if lh else "clear",
             outlet_overloaded=self._any_on(CONF_OUTLET_OVERLOAD),
             temperature_valid=indoor is not None,
+            unit_temperature=unit_indoor,
+            sensor_offset=sensor_offset,
             climate_valid=climate_valid,
             cover_closed=bool(covers) and all(s.state == "closed" for s in covers),
             invalid_entities=invalid,

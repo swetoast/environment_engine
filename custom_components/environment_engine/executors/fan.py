@@ -4,7 +4,7 @@ from homeassistant.const import ATTR_ENTITY_ID
 from ..const import ACTION_OFF, ACTION_ON, CONF_FAN
 from ..entities import as_list
 from ..features import fan_features
-from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed
+from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed, snap_percentage
 _LOGGER = logging.getLogger(__name__)
 async def apply_fan(hass, config: dict, snapshot, decision) -> bool:
     if decision.fan_action not in (ACTION_ON, ACTION_OFF):
@@ -18,7 +18,7 @@ async def _apply_one(hass, entity_id, decision) -> bool:
     if state is None:
         return True
     assumed = is_assumed(state)
-    desired_pct = SPEED_TO_PERCENTAGE.get(decision.fan_speed, 33) if (decision.fan_speed and fan_features(state).set_speed) else None
+    desired_pct = snap_percentage(SPEED_TO_PERCENTAGE.get(decision.fan_speed, 33), state.attributes.get("percentage_step")) if (decision.fan_speed and fan_features(state).set_speed) else None
     try:
         if decision.fan_action == ACTION_OFF:
             if state.state == "off" and not assumed:

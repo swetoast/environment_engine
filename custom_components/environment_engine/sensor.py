@@ -177,6 +177,10 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
             attrs["comfort"] = _sensation(vote)
             attrs["comfort_vote"] = round(vote, 2)
             attrs["people_uncomfortable_pct"] = round(_ppd(vote))
+        if s.sensor_offset is not None and abs(s.sensor_offset) >= 1.0:
+            # Worth showing only when it is big enough to change the outcome.
+            attrs["ac_sensor_reads_c"] = s.unit_temperature
+            attrs["ac_sensor_offset_c"] = s.sensor_offset
         attrs["room_holds_heat_pct"] = round(m.thermal_inertia * 100)
         attrs["expected_warming_c"] = round(self.coordinator._anticipation(s), 1)
         # What the learned thermal model knows about this room.

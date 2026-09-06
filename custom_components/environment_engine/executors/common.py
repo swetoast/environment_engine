@@ -2,6 +2,25 @@
 from __future__ import annotations
 
 SPEED_TO_PERCENTAGE = {"low": 33, "medium": 66, "high": 100}
+
+
+def snap_percentage(pct, step):
+    """Round a tier percentage onto a device's own speed grid.
+
+    A three-speed unit reports percentage_step 33.33, so its real settings are 33 / 67 /
+    100 -- but the tier table has medium at 66. Sending a value the device actually offers
+    is cleaner than relying on Home Assistant to round it, and matches the medium tier to
+    the device's true middle speed rather than one point below it. An unreported or absurd
+    step leaves the value untouched.
+    """
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return pct
+    if step <= 0 or step >= 100:
+        return pct
+    snapped = round(round(pct / step) * step)
+    return max(int(step + 0.5), min(100, snapped))
 _SKIP = ("unavailable", "unknown")
 
 

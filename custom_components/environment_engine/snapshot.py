@@ -27,6 +27,9 @@ class Snapshot:
     quiet: bool = False
     fan_running: bool = False
     fan_available: bool = True
+    unit_temperature: float | None = None    # what the AC's own sensor reads
+    sensor_offset: float | None = None       # unit sensor minus room sensor
+    outdoor_aqi_soon: float | None = None    # worst outdoor AQI in the next few hours
     cover_closed: bool = False
     lux: float | None = None
     humidifier_class: str | None = None

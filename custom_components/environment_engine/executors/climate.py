@@ -49,7 +49,18 @@ async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
             # again here, and downward, so the conversion can only ever land colder.
             import math
             converted = float(from_celsius(float(decision.target_temperature), snapshot.temperature_unit))
-            target = float(math.floor(converted + 1e-9))
+            # Snap to the step the unit actually accepts, rounding DOWN so the conversion
+            # can only ever land colder. Most air conditioners report a step of 1, which is
+            # why the engine works in whole degrees -- but a unit that accepts 0.5 should
+            # get the finer value rather than having it thrown away.
+            try:
+                step = float(state.attributes.get("target_temp_step") or 1.0)
+            except (TypeError, ValueError):
+                step = 1.0
+            if step <= 0:
+                step = 1.0
+            target = math.floor(converted / step + 1e-9) * step
+            target = round(target, 2)
             dmin, dmax = state.attributes.get("min_temp"), state.attributes.get("max_temp")
             if dmin is not None:
                 target = max(target, float(dmin))

@@ -5,7 +5,7 @@ from ..const import ACTION_OFF, ACTION_ON, CONF_PURIFIER
 from ..entities import as_list
 from ..features import fan_features
 from ..presets import preset_for_speed
-from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed
+from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed, snap_percentage
 _LOGGER = logging.getLogger(__name__)
 async def apply_purifier(hass, config: dict, decision) -> bool:
     if decision.purifier_action not in (ACTION_ON, ACTION_OFF):
@@ -28,7 +28,8 @@ async def _apply_one(hass, entity_id, decision) -> bool:
         desired_preset = preset_for_speed(state.attributes.get("preset_modes"), decision.purifier_speed)
     desired_pct = None
     if desired_preset is None and features is not None and features.set_speed and decision.purifier_speed:
-        desired_pct = SPEED_TO_PERCENTAGE.get(decision.purifier_speed, 33)
+        desired_pct = snap_percentage(SPEED_TO_PERCENTAGE.get(decision.purifier_speed, 33),
+                                      state.attributes.get("percentage_step"))
     try:
         if decision.purifier_action == ACTION_OFF:
             if state.state == "off" and not assumed:

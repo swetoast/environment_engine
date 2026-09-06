@@ -59,12 +59,19 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
     quiet = snapshot.quiet and not too_hot_to_stay_quiet
     can_cool = vented_ok and not quiet
 
-    # The AC's own fan_only is useful when it is the room's only air mover, or when quiet
-    # hours mean it is standing in for the compressor. A standalone fan that is configured
-    # but offline is not an air mover, so the AC takes over rather than both sitting idle
-    # and leaving the room still.
+    # When the compressor is blocked and the room is still hot, the AC's own fan_only is
+    # standing in for cooling it cannot do -- so it runs even alongside a standalone fan,
+    # because every air mover helps and fan_only costs nothing but a little noise. It makes
+    # no difference *why* the compressor is blocked: quiet hours and an unvented portable
+    # are the same situation, and treating them differently was an arbitrary split.
+    # (fan_only on an unvented portable is harmless: no compressor, so no condenser heat.)
+    #
+    # Outside that, the AC only fans when it is the room's only air mover -- two fans in one
+    # room is just noise. A standalone fan that is configured but offline is not an air
+    # mover, so the AC takes over rather than both sitting idle and leaving the room still.
     standalone_fan = capabilities.fan and snapshot.fan_available
-    ac_fan_ok = HVAC_FAN_ONLY in modes and (quiet or not standalone_fan)
+    compressor_blocked = not can_cool
+    ac_fan_ok = HVAC_FAN_ONLY in modes and (compressor_blocked or not standalone_fan)
 
     # --- 3. Above the setpoint: cool, or keep air moving if the compressor is blocked ---
     if above_target:
