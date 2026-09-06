@@ -23,6 +23,19 @@ async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
     assumed = is_assumed(state)
     modes = state.attributes.get("hvac_modes", []) or []
     feats = climate_features(state)
+
+    # Hard safety backstop, independent of the resolver. The compressor modes dump
+    # condenser heat down the exhaust hose; if that hose is not confirmed vented, running
+    # them heats the room instead of cooling it. The resolver already gates this, but a
+    # safety failure this direct deserves defence in depth: never *send* cool or dry to a
+    # unit the snapshot says is unvented. Stand it down instead.
+    if (decision.hvac_mode in (HVAC_COOL, HVAC_DRY)
+            and getattr(snapshot, "vent_required", False)
+            and not snapshot.vented):
+        if state.state in _MANAGED and HVAC_OFF in modes:
+            await hass.services.async_call("climate", "set_hvac_mode",
+                {ATTR_ENTITY_ID: entity_id, "hvac_mode": HVAC_OFF}, blocking=True)
+        return True
     try:
         if decision.hvac_mode == HVAC_OFF:
             if state.state == HVAC_OFF and not assumed:

@@ -5,7 +5,7 @@ from ..const import ACTION_NONE, ACTION_OFF, ACTION_ON, IONIZER_NEVER, IONIZER_W
 _IONIZER_SURGE = 0.6  # 'surge' mode: air-quality pressure above this engages the ionizer
 
 
-def resolve_purifier(capabilities, options, ev, sleep=False):
+def resolve_purifier(snapshot, capabilities, options, ev, sleep=False):
     """Decide purifier run state, speed, and ionizer together. Returns
     (action, speed|None, ionizer_action, driver|None).
 
@@ -30,7 +30,14 @@ def resolve_purifier(capabilities, options, ev, sleep=False):
             speed = "medium"  # keep it quieter overnight
         ionizer = ionizer_idle
         if capabilities.ionizer and options.ionizer_mode != IONIZER_NEVER:
-            if options.ionizer_mode == IONIZER_WITH_PURIFIER or aq.seal or aq.pressure >= _IONIZER_SURGE:
+            wants_ionizer = (options.ionizer_mode == IONIZER_WITH_PURIFIER
+                             or aq.seal or aq.pressure >= _IONIZER_SURGE)
+            # An ionizer produces ozone, which is itself a lung irritant. Only run it in an
+            # EMPTY room: it should scrub the air while nobody is breathing it, and stand
+            # down (leaving the plain purifier running) the moment someone is present. When
+            # occupancy is unknown, err toward the person and leave it off.
+            room_empty = snapshot.occupancy is False
+            if wants_ionizer and room_empty:
                 ionizer = ACTION_ON
         return ACTION_ON, speed, ionizer, STRATEGY_AIR_QUALITY
     if aq.pressure < 0.15:

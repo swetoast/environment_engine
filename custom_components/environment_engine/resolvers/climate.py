@@ -52,8 +52,15 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
     indoor = snapshot.indoor_temp
     above_target = indoor is not None and indoor > base
 
-    # What can stop the compressor -- note that "the room is comfortable" is not on the list.
-    vented_ok = not options.portable_ac or snapshot.vented
+    # THE VENT GATE. The compressor (cool and dry both run it) must NOT run until the
+    # exhaust hose is confirmed vented -- otherwise it dumps condenser heat straight into
+    # the room, which is worse than doing nothing. A vent gate applies when EITHER the unit
+    # is marked portable in options OR a vent sensor is wired; the previous code keyed only
+    # off the portable option, so a room with a vent sensor but the box unticked would cool
+    # unvented. `snapshot.vented` is true only via that sensor or the manual Exhaust Vented
+    # switch, which defaults OFF -- the safe state.
+    vent_required = options.portable_ac or capabilities.vent_sensor
+    vented_ok = not vent_required or snapshot.vented
     temp = snapshot.feels_like if snapshot.feels_like is not None else indoor
     too_hot_to_stay_quiet = temp is not None and temp >= options.quiet_max_temp
     quiet = snapshot.quiet and not too_hot_to_stay_quiet
@@ -90,7 +97,11 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
             return (HVAC_OFF if snapshot.hvac_mode in _MANAGED else None), None, None
 
     # --- 4. At or below the setpoint, but the air is too wet ---
-    elif capabilities.humidity and not capabilities.humidifier and HVAC_DRY in modes:
+    # DRY runs the compressor too, so it obeys the SAME vent gate as cooling. Without this
+    # an unvented portable would dehumidify -- dumping condenser heat into the room -- and,
+    # worse, the "already drying" branch would keep it running once started.
+    elif (vented_ok and capabilities.humidity and not capabilities.humidifier
+          and HVAC_DRY in modes):
         already_drying = snapshot.hvac_mode == HVAC_DRY
         if already_drying and not dehumidify_satisfied(snapshot, options):
             return HVAC_DRY, None, STRATEGY_DEHUMIDIFY

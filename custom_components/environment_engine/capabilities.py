@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
-from .const import CONF_BLINDS, CONF_CLIMATE, CONF_CO2, CONF_FAN, CONF_LUX, CONF_AQI, CONF_HUMIDIFIER, CONF_OUTDOOR_AQI, CONF_PM10, CONF_PM25, CONF_VENTILATION, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_OCCUPANCY, CONF_OUTLET_OVERLOAD, CONF_PRICE, CONF_PURIFIER, CONF_IONIZER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW
+from .const import CONF_VENT, CONF_BLINDS, CONF_CLIMATE, CONF_CO2, CONF_FAN, CONF_LUX, CONF_AQI, CONF_HUMIDIFIER, CONF_OUTDOOR_AQI, CONF_PM10, CONF_PM25, CONF_VENTILATION, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_OCCUPANCY, CONF_OUTLET_OVERLOAD, CONF_PRICE, CONF_PURIFIER, CONF_IONIZER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW
 @dataclass(slots=True)
 class Capabilities:
     climate: bool
@@ -22,6 +22,7 @@ class Capabilities:
     smoke: bool
     lightning: bool
     outlet_overload: bool
+    vent_sensor: bool = False
 def build_capabilities(config: dict[str, Any]) -> Capabilities:
     return Capabilities(
         climate=bool(config.get(CONF_CLIMATE)),
@@ -39,6 +40,10 @@ def build_capabilities(config: dict[str, Any]) -> Capabilities:
         humidifier=bool(config.get(CONF_HUMIDIFIER)),
         ionizer=bool(config.get(CONF_IONIZER)),
         ventilation=bool(config.get(CONF_VENTILATION)),
+        # True when a vent sensor is wired for the exhaust hose. Combined in the climate
+        # resolver with the portable-AC option, since that lives in options rather than
+        # here. Either one means the compressor must not run until venting is confirmed.
+        vent_sensor=bool(config.get(CONF_VENT)),
         smoke=bool(config.get(CONF_SMOKE)),
         lightning=bool(config.get(CONF_LIGHTNING_DISTANCE)),
         outlet_overload=bool(config.get(CONF_OUTLET_OVERLOAD)),

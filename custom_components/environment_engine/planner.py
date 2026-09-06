@@ -50,7 +50,7 @@ class Planner:
         hvac_mode, target, climate_driver = resolve_climate(snapshot, self.capabilities, self.options, evaluations, passive_cooling)
         fan_action, fan_speed, fan_driver = resolve_fan(snapshot, self.capabilities, self.options, evaluations, passive_cooling, sleep)
         cover_action, cover_driver = resolve_cover(snapshot, self.capabilities, evaluations)
-        purifier_action, purifier_speed, ionizer_action, purifier_driver = resolve_purifier(self.capabilities, self.options, evaluations, sleep)
+        purifier_action, purifier_speed, ionizer_action, purifier_driver = resolve_purifier(snapshot, self.capabilities, self.options, evaluations, sleep)
         humidifier_action, humidifier_target, humidifier_driver = resolve_humidifier(snapshot, self.capabilities, self.options, evaluations)
         ventilation_action, ventilation_driver = resolve_ventilation(snapshot, self.capabilities, self.options, evaluations)
 
@@ -72,7 +72,7 @@ class Planner:
         # settle into the home. Everything else stays idle to save energy while away.
         aq = evaluations["air_quality"]
         if aq.seal and self.capabilities.purifier and self.capabilities.air_quality:
-            purifier, speed, ionizer, _ = resolve_purifier(self.capabilities, self.options, evaluations, sleep=False)
+            purifier, speed, ionizer, _ = resolve_purifier(snapshot, self.capabilities, self.options, evaluations, sleep=False)
             return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, ACTION_NONE, purifier, 1.0,
                             "sealing against outdoor air while away", purifier_speed=speed,
                             ionizer_action=ionizer, ventilation_action=vent)

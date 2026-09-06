@@ -234,6 +234,14 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _any_on(self, key: str) -> bool:
         return any(s.state == "on" for s in self._states(key))
 
+    def _any_triggered(self, key: str) -> bool:
+        """Like _any_on, but for SAFETY sensors -- fire on any state that means 'active'.
+        Smoke and overload integrations variously report `on`, `detected`, or `true`; a
+        safety block must catch all of them rather than only the literal `on`. Kept
+        separate from _any_on so a window contact never treats `detected` as open."""
+        active = {"on", "detected", "true", "1", "alarm", "overload", "tripped"}
+        return any(str(s.state).strip().lower() in active for s in self._states(key))
+
     def _occupied(self, key: str) -> bool:
         usable = self._usable(self._states(key))
         if not usable:
@@ -465,6 +473,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # The exhaust hose is vented only via its OWN vent sensor or the manual switch --
             # a generic door/window contact must never imply the hose is vented.
             vented=self._any_on(CONF_VENT) or self.vent_override,
+            vent_required=bool(self.options.portable_ac) or bool(as_list(self.config.get(CONF_VENT))),
             fan_running=self._any_on(CONF_FAN),
             fan_available=not self._invalid(CONF_FAN),
             quiet=self.options.quiet_hours and in_quiet_hours(dt_util.now().time(), self.options.quiet_start, self.options.quiet_end),
@@ -492,12 +501,12 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             temperature_unit=system_unit,
             sun_up=sun is not None and sun.state == "above_horizon",
             sun_elevation=self._attr(sun, "elevation"),
-            smoke_detected=self._any_on(CONF_SMOKE),
+            smoke_detected=self._any_triggered(CONF_SMOKE),
             lightning_hold=lh,
             lightning_closest=lc,
             lightning_strikes=ls,
             lightning_band=lightning_band(lc) if lh else "clear",
-            outlet_overloaded=self._any_on(CONF_OUTLET_OVERLOAD),
+            outlet_overloaded=self._any_triggered(CONF_OUTLET_OVERLOAD),
             temperature_valid=indoor is not None,
             unit_temperature=unit_indoor,
             sensor_offset=sensor_offset,
