@@ -1,6 +1,7 @@
 # Environment Engine
 
 [![hacs][hacs-badge]][hacs-url]
+[![release][release-badge]][release-url]
 
 An autonomous climate, air-quality and humidity controller for Home Assistant.
 
@@ -142,6 +143,11 @@ unvented portable unit, the few minutes the compressor is protected after stoppi
 fan that has gone offline, free cooling through an open window, or drying the coil after a cycle.
 It is never chosen instead of cooling — a fan moves heat around, it does not remove any.
 
+**Ozone-aware ionizer.** A purifier ionizer produces ozone, itself a lung irritant, so the engine
+only runs it in an **empty room** and stands it down the moment you're detected present — the plain
+purifier keeps running either way. With no occupancy sensor it assumes you're home and leaves the
+ionizer off.
+
 ## Portable air conditioners
 
 A portable unit dumps condenser heat down its exhaust hose, so running it unvented actively *heats*
@@ -152,6 +158,11 @@ A general door or window sensor will **not** do — an open interior door does n
 When it cannot cool, the unit falls back to fan-only to keep air moving. The manual switch
 auto-reverts after a few hours, and that deadline survives a restart, so a forgotten toggle cannot
 strand the unit into heating the room.
+
+**The vent gate applies whenever an exhaust vent contact is wired, even if you don't tick
+"Portable AC".** Cooling *and* drying are both blocked until venting is confirmed — the engine
+never runs the compressor into an unvented hose. If you have neither a portable unit nor a vent
+contact, there is no hose to vent and no gate.
 
 ## What it learns
 
@@ -178,7 +189,9 @@ sensors.
 stops the compressor, and closer or busier storms hold longer.
 
 **A portable AC will not cool.** It needs a vent signal — the exhaust vent contact, or the
-**Exhaust Vented** switch.
+**Exhaust Vented** switch. This is deliberate: an unvented portable unit dumps its condenser heat
+back into the room, so the engine refuses to cool or dry until venting is confirmed. Flip the
+switch on only when the hose is actually out the window.
 
 **Options changed but nothing happened.** Fully restart Home Assistant; a reload is not enough.
 
