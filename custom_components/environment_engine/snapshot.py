@@ -25,11 +25,13 @@ class Snapshot:
     portable_ac: bool = False
     vented: bool = False
     quiet: bool = False
-    fan_running: bool = False
     fan_available: bool = True
     unit_temperature: float | None = None    # what the AC's own sensor reads
     sensor_offset: float | None = None       # unit sensor minus room sensor
     outdoor_aqi_soon: float | None = None    # worst outdoor AQI in the next few hours
+    outdoor_pollen: float | None = None      # worst current pollen, grains/m3 (filterable)
+    outdoor_pollen_soon: float | None = None # worst pollen in the next few hours
+    outdoor_gas: float | None = None         # worst current outdoor gas level, 0..1 (not filterable)
     vent_required: bool = False               # exhaust must be confirmed vented before cool/dry
     cover_closed: bool = False
     lux: float | None = None
@@ -45,6 +47,7 @@ class Snapshot:
     pm10: float | None = None
     dark: bool = False
     forecast_high: float | None = None
+    precool_opportunity: float = 0.0   # 0..1 forecast-coupled: heat coming later, cheaper now
     forecast_pressure: float = 0.0
     price_average: float | None = None
     price_rank: float | None = None

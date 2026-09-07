@@ -35,7 +35,7 @@ _TRUSTED = 60              # clean samples for full confidence
 
 # Physically sane bounds -- a bad fit must never produce nonsense control.
 _K_RANGE = (0.0, 0.05)     # per minute, per °C of indoor/outdoor difference
-_C_RANGE = (-0.5, 0.0)     # cooling can only cool
+_C_RANGE = (-0.5, 0.0)     # the engine only cools; this coefficient is cooling-only
 _B_RANGE = (-0.2, 0.2)
 _S_RANGE = (0.0, 0.5)
 _O_RANGE = (0.0, 0.2)      # people add heat; they never chill a room
@@ -82,6 +82,7 @@ class ThermalModel:
         self.struggling = False                       # cooling, but the room still gains
         self._residual_ema = 0.0                      # persistent, *signed* model error
         self._noise_var = 0.0                         # baseline noise, measured in quiet times only
+        self.peak_effort = 0.0                        # best |conditioning rate| this room has shown
 
     # ---------- fitting ----------
     def update(self, previous, current, dt_minutes: float, cooling: bool, solar: float) -> bool:
@@ -144,6 +145,13 @@ class ThermalModel:
         # A one-off error is noise. An error that keeps pointing the same way is the room
         # doing something the physics can't explain -- that's the interesting signal.
         self._residual_ema = 0.85 * self._residual_ema + 0.15 * error
+        # Track the best conditioning rate this room has ever shown, once there's enough
+        # evidence to trust it. Effectiveness is measured against THIS -- the room's own
+        # proven best -- not an assumed "healthy unit" rate, so it works for any hardware:
+        # a tiny bedroom unit, a whole-house system, or a heat pump warming rather than
+        # cooling. The magnitude is direction-agnostic; |c| covers cool and heat alike.
+        if self.confidence >= 0.5:
+            self.peak_effort = max(self.peak_effort, abs(self.cooling_power))
         # The yardstick has to be the room's *quiet* noise. Folding the anomaly into the
         # same variance we measure it against would let a big enough event hide inside its
         # own inflated error bars, so ordinary-looking errors update the baseline and
@@ -213,13 +221,29 @@ class ThermalModel:
 
     @property
     def effectiveness(self) -> float:
-        """0..1 -- how well cooling actually works in this room, measured with the
-        outdoor/solar/internal load controlled for. A healthy split unit removes on the
-        order of 0.08 °C per minute; much less than that and the compressor is buying
-        little for its energy."""
-        if self.confidence <= 0.0:
-            return 0.5  # unknown: assume ordinary, bias nothing
-        return _clamp(-self.cooling_power / 0.08, 0.0, 1.0)
+        """0..1 -- how well the climate system is performing RIGHT NOW relative to the best
+        this room has ever shown, load controlled for. Direction-agnostic: it reads the same
+        whether a unit is cooling or a heat pump is heating, because it compares the current
+        conditioning rate against the room's own proven peak rather than an assumed ideal.
+
+        100% means "as good as this room gets"; a sustained drop is the useful signal -- a
+        clogging filter, a door left open, a failing compressor. Returns 0.5 (neutral) until
+        there is a trustworthy baseline to measure against, so it never accuses new hardware.
+        """
+        if self.confidence <= 0.0 or self.peak_effort <= 1e-4:
+            return 0.5  # no baseline yet: assume ordinary, claim nothing
+        return _clamp(abs(self.cooling_power) / self.peak_effort, 0.0, 1.0)
+
+    @property
+    def conditioning_direction(self) -> str:
+        """Which way the climate system is actually moving the room -- for the sensor's
+        readout. The engine itself only ever cools, but a user's heat pump may be heating
+        on its own, so this reads the measured drift rather than the (cooling-only)
+        coefficient: a room trending warmer under active conditioning is being heated.
+        """
+        if self.confidence <= 0.0 or abs(self.cooling_power) <= 1e-4:
+            return "idle"
+        return "cooling"
 
     def cooling_bias(self, cap: float = 0.05) -> float:
         """A small, bounded nudge to the engine's willingness to cool, based on what the
@@ -334,6 +358,7 @@ class ThermalModel:
             "residual_var": self._residual_var,
             "residual_ema": self._residual_ema,
             "noise_var": self._noise_var,
+            "peak_effort": self.peak_effort,
             "buckets": {"rates": dict(self.buckets.rates), "counts": dict(self.buckets.counts)},
             "cooling_effect": dict(self.cooling_effect),
         }
@@ -355,6 +380,7 @@ class ThermalModel:
             self._residual_var = float(data.get("residual_var", 0.0))
             self._residual_ema = float(data.get("residual_ema", 0.0))
             self._noise_var = float(data.get("noise_var", 0.0))
+            self.peak_effort = float(data.get("peak_effort", 0.0))
             buckets = data.get("buckets") or {}
             self.buckets.rates = {str(k): float(v) for k, v in (buckets.get("rates") or {}).items()}
             self.buckets.counts = {str(k): int(v) for k, v in (buckets.get("counts") or {}).items()}

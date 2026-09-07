@@ -9,7 +9,7 @@ from .adaptive_learning import AdaptiveLearning
 from .air_model import AirModel, speed_fraction
 from .thermal_model import ThermalModel
 from .capabilities import build_capabilities
-from .const import CONF_AQI, CONF_FAN, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY
+from .const import CONF_AQI, CONF_FAN, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTDOOR_POLLEN, CONF_OUTDOOR_GAS, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, CONF_VENTILATION, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY
 from .entities import as_list
 from .evaluators import evaluate_air_quality, evaluate_energy, evaluate_humidity, evaluate_mold, evaluate_safety, evaluate_solar, evaluate_thermal
 from .executors import EnvironmentExecutor
@@ -270,6 +270,24 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 reasons.append(f"{eid} ({state.state})")
         return reasons
 
+    def _actuator_conflicts(self):
+        """Flag an actuator entity wired into more than one control slot. Fan, purifier,
+        humidifier and climate all issue independent commands; the same entity in two of
+        them means two resolvers fight over it -- the fan resolver could turn a device on
+        while the purifier resolver turns it off. Both a fan and a purifier live in the
+        Home Assistant `fan` domain, so this is an easy mistake to make. It is a config
+        error rather than an engine fault, but the engine should say so plainly instead of
+        behaving erratically."""
+        actuator_keys = (CONF_CLIMATE, CONF_FAN, CONF_PURIFIER, CONF_HUMIDIFIER, CONF_VENTILATION)
+        seen, conflicts = {}, []
+        for key in actuator_keys:
+            for eid in as_list(self.config.get(key)):
+                if eid in seen and seen[eid] != key:
+                    conflicts.append(f"{eid} (in both {seen[eid]} and {key})")
+                else:
+                    seen[eid] = key
+        return conflicts
+
     @staticmethod
     def _parse_dt(value):
         if value is None:
@@ -286,19 +304,37 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             return None
 
-    def _outdoor_aqi_soon(self):
-        """The worst outdoor AQI expected over the next few hours, from the sensor's own
-        hourly_forecast. Lets the engine air the place out *before* outdoor air turns bad,
-        rather than only reacting once a seal is already needed."""
-        horizon = dt_util.utcnow().timestamp() + 4 * 3600
+    def _forecast_peak(self, key, hours=4):
+        """Worst forecast value over the next `hours`, across all sensors in `key`.
+
+        Handles both attribute shapes seen in the wild: Open-Meteo air-quality sensors use
+        `hourly_forecast` with `datetime`/`value`; pollen sensors use `next_24_hours` with
+        `time`/`value` (and a ready-made `next_24_hours_max`). Lets the engine act *before*
+        the outdoor air turns bad -- air out ahead of a pollen peak, seal ahead of smoke --
+        rather than only reacting once it has already arrived.
+        """
+        horizon = dt_util.utcnow().timestamp() + hours * 3600
         worst = None
-        for s in self._usable(self._states(CONF_OUTDOOR_AQI)):
-            for item in (self._attr(s, "hourly_forecast") or []):
-                when = self._parse_dt(item.get("datetime")) if isinstance(item, dict) else None
-                value = self._as_float(item.get("value")) if isinstance(item, dict) else None
+        for s in self._usable(self._states(key)):
+            series = self._attr(s, "hourly_forecast") or self._attr(s, "next_24_hours") or []
+            for item in series:
+                if not isinstance(item, dict):
+                    continue
+                when = self._parse_dt(item.get("datetime") or item.get("time"))
+                value = self._as_float(item.get("value"))
                 if when is not None and value is not None and when.timestamp() <= horizon:
                     worst = value if worst is None else max(worst, value)
         return worst
+
+    def _outdoor_aqi_soon(self):
+        return self._forecast_peak(CONF_OUTDOOR_AQI)
+
+    def _worst_now(self, key):
+        """Worst current state across all sensors wired into `key` -- e.g. the highest of
+        five pollen species, or of several outdoor gas sensors."""
+        vals = [self._as_float(s.state) for s in self._usable(self._states(key))]
+        vals = [v for v in vals if v is not None]
+        return max(vals) if vals else None
 
     def _forecast_high(self, system_unit):
         """Highest upcoming peak across all configured forecast/weather sources."""
@@ -316,6 +352,36 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if peak is not None:
                 peaks.append(peak)
         return max(peaks) if peaks else None
+
+    def _precool_opportunity(self, system_unit):
+        """The forecast-coupled precool signal, only when the user has opted in. Ties the
+        weather forecast curve to the price forecast: bank cooling now only if heat is
+        genuinely coming later AND now is cheaper than then. Off by default, because it runs
+        the compressor while the room is not yet hot -- a deliberate bet the user must
+        choose, never a surprise."""
+        if not self.options.forecast_precool:
+            return 0.0
+        from .forecast import precool_opportunity
+        now = dt_util.utcnow()
+        # Weather forecast curve, in its own unit, from the forecast/weather source.
+        forecast, unit = None, system_unit
+        for state in self._states(CONF_FORECAST_HIGH):
+            entries = self._attr(state, "forecast")
+            if isinstance(entries, list) and entries:
+                forecast = entries
+                unit = self._attr(state, "temperature_unit") or system_unit
+                break
+        if not forecast:
+            return 0.0
+        # Price series over the horizon, or None (spot forecast absent -> heat curve alone).
+        prices = None
+        if self.options.pricing_mode == _PRICING_SPOT:
+            for state in self._states(CONF_PRICE_FORECAST) or self._states(CONF_PRICE):
+                pts = price_series(state.attributes, now)
+                if pts:
+                    prices = pts
+                    break
+        return precool_opportunity(forecast, prices, now, float(self.options.target), unit)
 
     def _forecast_pressure(self, system_unit):
         """Weighted upcoming-heat pressure (how hot/soon/sustained) across sources."""
@@ -462,6 +528,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         lh, lc, ls = self._lightning()
         sun = self.hass.states.get("sun.sun")
         invalid = [reason for key in ENTITY_KEYS for reason in self._invalid(key)]
+        invalid += self._actuator_conflicts()
         return Snapshot(
             indoor_temp=indoor if indoor is not None else 0.0,
             humidity=(humidity := self._mean(CONF_HUMIDITY)),
@@ -474,7 +541,6 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # a generic door/window contact must never imply the hose is vented.
             vented=self._any_on(CONF_VENT) or self.vent_override,
             vent_required=bool(self.options.portable_ac) or bool(as_list(self.config.get(CONF_VENT))),
-            fan_running=self._any_on(CONF_FAN),
             fan_available=not self._invalid(CONF_FAN),
             quiet=self.options.quiet_hours and in_quiet_hours(dt_util.now().time(), self.options.quiet_start, self.options.quiet_end),
             energy_price=self._mean(CONF_PRICE),
@@ -489,10 +555,14 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             aqi_dominant_factor=aqi_dominant,
             outdoor_aqi=self._max(CONF_OUTDOOR_AQI),
             outdoor_aqi_soon=self._outdoor_aqi_soon(),
+            outdoor_pollen=self._worst_now(CONF_OUTDOOR_POLLEN),
+            outdoor_pollen_soon=self._forecast_peak(CONF_OUTDOOR_POLLEN),
+            outdoor_gas=self._worst_now(CONF_OUTDOOR_GAS),
             pm25=self._max(CONF_PM25),
             pm10=self._max(CONF_PM10),
             dark=(lux := self._max(CONF_LUX)) is not None and self.options.sleep_lux > 0 and lux <= self.options.sleep_lux,
             forecast_high=self._forecast_high(system_unit),
+            precool_opportunity=self._precool_opportunity(system_unit),
             forecast_pressure=self._forecast_pressure(system_unit),
             hvac_mode=hvac_mode,
             hvac_modes=hvac_modes,

@@ -12,6 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     async_add_entities([EnvironmentDecisionSensor(coordinator, entry), EnvironmentThermalPressureSensor(coordinator, entry),
                         EnvironmentRuntimeSensor(coordinator, entry, "climate", "Air Conditioner Used Today"),
                         EnvironmentRuntimeSensor(coordinator, entry, "purifier", "Air Purifier Used Today"),
+                        EnvironmentEffectivenessSensor(coordinator, entry),
                         EnvironmentDiagnosticsSensor(coordinator, entry)])
 
 
@@ -93,6 +94,96 @@ class EnvironmentDecisionSensor(EnvironmentEngineEntity, SensorEntity):
         return attrs
 
 
+class EnvironmentEffectivenessSensor(EnvironmentEngineEntity, SensorEntity):
+    """How well each system in this room is actually performing, as a percentage.
+
+    Universal by design: the state is the effectiveness of the room's PRIMARY system
+    (climate if present, else air cleaning, else humidity control), and the attributes
+    carry a per-system breakdown -- but only for systems the room actually has. A room
+    with just a fan reports "unavailable", because a fan removes nothing to measure.
+
+    Every figure is relative to what THIS room has proven it can do, not an assumed ideal,
+    so it reads sensibly for any hardware -- a tiny portable unit, a whole-house system, or
+    a purifier with a half-clogged filter. 100% means "as good as this room gets"; a
+    sustained drop is the signal that something has changed.
+
+    Scope: climate effectiveness reflects the conditioning the ENGINE drives (it cools, so
+    that is cooling). A unit heating on its own is outside what the engine measures, and the
+    climate figure stays neutral until the engine has actually driven cooling. Air and
+    humidity effectiveness are measured whenever those systems run, engine-driven or not.
+    """
+    _attr_name = "Effectiveness"
+    _attr_icon = "mdi:gauge"
+    _attr_native_unit_of_measurement = "%"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "effectiveness")
+
+    def _dimensions(self):
+        """(label, percent, confidence) for each system the room actually has, primary
+        first. Empty when the room has nothing whose effectiveness can be measured."""
+        caps = self.coordinator.data["capabilities"]
+        thermal, air = self.coordinator.thermal, self.coordinator.air
+        out = []
+        if caps.climate and caps.temperature:
+            out.append(("climate", round(thermal.effectiveness * 100), thermal.confidence))
+        if caps.purifier and caps.air_quality:
+            # Air-cleaning effectiveness IS the filter health: how much of its measured
+            # best cleaning power the purifier still delivers. None until there's evidence.
+            health = air.filter_health
+            pct = round(health * 100) if health is not None else None
+            out.append(("air", pct, air.confidence))
+        if caps.humidifier:
+            learning = self.coordinator.data["learning"]
+            total = learning.drying_successes + learning.drying_failures
+            pct = round(100 * learning.drying_successes / total) if total else None
+            out.append(("humidity", pct, min(1.0, total / 20.0)))
+        return out
+
+    @property
+    def native_value(self):
+        dims = self._dimensions()
+        for _label, pct, _conf in dims:
+            if pct is not None:
+                return pct
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        thermal, air = self.coordinator.thermal, self.coordinator.air
+        dims = self._dimensions()
+        attrs = {}
+        primary = dims[0][0] if dims else None
+        attrs["primary_system"] = primary
+
+        for label, pct, conf in dims:
+            attrs[f"{label}_effectiveness_pct"] = pct
+            attrs[f"{label}_confidence_pct"] = round(conf * 100)
+
+        if any(d[0] == "climate" for d in dims):
+            attrs["climate_direction"] = thermal.conditioning_direction
+            attrs["conditioning_rate_c_per_min"] = round(abs(thermal.cooling_power), 4)
+            attrs["best_rate_c_per_min"] = round(thermal.peak_effort, 4)
+            attrs["struggling"] = thermal.struggling
+        if any(d[0] == "air" for d in dims):
+            attrs["filter_health_pct"] = round(air.filter_health * 100) if air.filter_health is not None else None
+
+        # A plain-language status for the primary system.
+        primary_conf = dims[0][2] if dims else 0.0
+        primary_pct = attrs.get(f"{primary}_effectiveness_pct") if primary else None
+        if primary is None:
+            attrs["status"] = "not measurable"
+        elif primary_conf < 0.5 or primary_pct is None:
+            attrs["status"] = "learning"
+        elif primary_pct >= 75:
+            attrs["status"] = "healthy"
+        elif primary_pct >= 50:
+            attrs["status"] = "reduced"
+        else:
+            attrs["status"] = "degraded"
+        return attrs
+
+
 class EnvironmentDiagnosticsSensor(EnvironmentEngineEntity, SensorEntity):
     """Engine internals for debugging -- capabilities, learning counters, price and
     lightning detail. Diagnostic category so it stays out of the way."""
@@ -118,6 +209,7 @@ class EnvironmentDiagnosticsSensor(EnvironmentEngineEntity, SensorEntity):
             "lightning_hold": s.lightning_hold,
             "lightning_strikes": s.lightning_strikes,
             "lightning_closest_km": round(s.lightning_closest, 1) if s.lightning_closest is not None else None,
+            "lightning_band": s.lightning_band,
             "drying_successes": l.drying_successes,
             "drying_failures": l.drying_failures,
             "model_samples": self.coordinator.thermal.samples,

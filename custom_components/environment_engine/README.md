@@ -114,6 +114,7 @@ Each room entry creates:
 | Filter Due | Binary sensor | Measured filter degradation, or configured hours |
 | Blocked | Binary sensor | A safety hold is active |
 | Invalid Entities | Binary sensor | A configured entity is missing or unavailable |
+| Effectiveness | Sensor (%) | How well each system performs vs this room's own best — climate, air, humidity, whichever it has |
 | Diagnostics | Sensor | Engine internals: capabilities, model fit, price rank, lightning |
 | Auto Apply | Switch | Decide only, or act |
 | Exhaust Vented | Switch | Manual vent signal for a portable AC |

@@ -19,7 +19,9 @@
           "price_entity": "Energy price",
           "price_average_sensor": "Average / reference price",
           "lightning_distance_sensor": "Lightning sensor (Blitzortung)",
-          "price_forecast_sensor": "Price forecast (optional)"
+          "price_forecast_sensor": "Price forecast (optional)",
+          "outdoor_pollen_sensor": "Outdoor pollen (grains/m³)",
+          "outdoor_gas_sensor": "Outdoor gas (ozone / CO / NO₂, 0–1)"
         },
         "data_description": {
           "weather_entity": "Outdoor temperature for solar load and passive-ventilation checks.",
@@ -259,7 +261,9 @@
           "ionizer_mode": "Ionizer",
           "humidity_sensitivity": "Humidity sensitivity",
           "away_max_drift": "Let an empty home drift up to (°C above target)",
-          "coil_dry_out": "Dry the coil after cooling (seconds)"
+          "coil_dry_out": "Dry the coil after cooling (seconds)",
+          "pollen_threshold": "Pollen threshold (grains/m³)",
+          "forecast_precool": "Pre-cool ahead of forecast heat"
         },
         "data_description": {
           "auto_apply": "When off, the engine shows what it would do without touching any device.",
@@ -290,7 +294,9 @@
           "ionizer_mode": "When the ionizer runs. 'With the purifier' turns it on whenever the purifier runs; 'Only on heavy pollution' saves it for a strong surge; 'Never' leaves it off.",
           "humidity_sensitivity": "How much damp air bothers you. The comfort model includes humidity but underweights it — it will call 25 °C at 90% comfortable when the dew point is 23 °C and the room is clammy. This sets the dew-point line at which the engine starts dehumidifying regardless of temperature.",
           "away_max_drift": "How far above your target an unoccupied room may get before the engine caps it. Letting it bake means you walk into a hot flat and the unit has to claw it all back at once, which costs more than never letting it get there. Set 0 to let it drift without limit.",
-          "coil_dry_out": "After cooling or dehumidifying stops, run the fan briefly to evaporate the water left on the coil — a wet coil sitting in a dark box is how an air conditioner starts to smell. This is what the manufacturers' own 'auto clean' does. Set 0 to switch it off."
+          "coil_dry_out": "After cooling or dehumidifying stops, run the fan briefly to evaporate the water left on the coil — a wet coil sitting in a dark box is how an air conditioner starts to smell. This is what the manufacturers' own 'auto clean' does. Set 0 to switch it off.",
+          "pollen_threshold": "Outdoor pollen level at which the home seals and the purifier runs. Pollen is filterable, so sealing genuinely helps hay-fever sufferers.",
+          "forecast_precool": "When a hot afternoon is forecast and electricity is cheaper now than it will be then, bank a little cooling in advance. Off by default: it runs the compressor while the room isn't yet hot, as a deliberate money-saving trade on a spot-price tariff. It only ever cools harder — it never stops the engine cooling a hot room."
         }
       }
     }
@@ -315,6 +321,13 @@
         "normal": "Normal (15 °C)",
         "sensitive": "Sensitive (13 °C)",
         "very_sensitive": "Very sensitive (11 °C)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "effectiveness": {
+        "name": "Effectiveness"
       }
     }
   }

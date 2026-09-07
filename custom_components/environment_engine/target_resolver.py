@@ -80,6 +80,12 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
     precool_drop = 0.0
     if snapshot.forecast_pressure > 0 and snapshot.price_precool:
         precool_drop = _clamp(snapshot.forecast_pressure, 0.0, 1.0) * _MAX_PRECOOL
+    # Forecast-coupled precool (opt-in): if heat is genuinely coming later and now is
+    # cheaper than then, bank a little extra cooling now. It only ever DEEPENS the drop --
+    # like every context signal it can pull the setpoint down, never push it up -- so it
+    # can't stop the engine cooling a hot room. Whole degrees, capped with the rest.
+    if snapshot.precool_opportunity > 0:
+        precool_drop = max(precool_drop, snapshot.precool_opportunity * _MAX_PRECOOL)
 
     # Muggy comfort is now handled upstream by the feels-like temperature (a humid
     # room reads warmer to the thermal evaluator), so there is no separate target drop.

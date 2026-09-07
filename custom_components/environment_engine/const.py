@@ -25,6 +25,8 @@ CONF_FORECAST_HIGH = "forecast_high_sensor"
 CONF_PRICE_AVERAGE = "price_average_sensor"
 CONF_PRICE_FORECAST = "price_forecast_sensor"
 CONF_OUTDOOR_AQI = "outdoor_aqi_sensor"
+CONF_OUTDOOR_POLLEN = "outdoor_pollen_sensor"
+CONF_OUTDOOR_GAS = "outdoor_gas_sensor"
 CONF_LIGHTNING_DISTANCE = "lightning_distance_sensor"
 CONF_PM25 = "pm25_sensor"
 CONF_PM10 = "pm10_sensor"
@@ -59,6 +61,8 @@ OPT_HUMIDITY_SENSITIVITY = "humidity_sensitivity"
 OPT_AWAY_MAX_DRIFT = "away_max_drift"
 OPT_COIL_DRY_OUT = "coil_dry_out"
 OPT_OUTDOOR_AQI_THRESHOLD = "outdoor_aqi_threshold"
+OPT_POLLEN_THRESHOLD = "pollen_threshold"
+OPT_FORECAST_PRECOOL = "forecast_precool"
 OPT_DEWPOINT_MARGIN = "dewpoint_margin"
 OPT_LIGHTNING_DISTANCE = "lightning_distance"
 OPT_CO2_VENTILATE = "co2_ventilate"
@@ -132,6 +136,8 @@ DEFAULTS = {
     OPT_AWAY_MAX_DRIFT: 4,
     OPT_COIL_DRY_OUT: 120,
     OPT_OUTDOOR_AQI_THRESHOLD: 100,
+    OPT_POLLEN_THRESHOLD: 1.0,
+    OPT_FORECAST_PRECOOL: False,     # opt-in: bank cooling ahead of forecast heat        # grains/m3 above which pollen counts as elevated
     OPT_DEWPOINT_MARGIN: 2.0,
     OPT_LIGHTNING_DISTANCE: 40,
     OPT_CO2_VENTILATE: 1000,
@@ -150,7 +156,7 @@ DEFAULTS = {
 
 # Shared across the whole home -- configured once on the Global entry.
 GLOBAL_ENTITY_KEYS = (
-    CONF_WEATHER, CONF_FORECAST_HIGH, CONF_OUTDOOR_AQI, CONF_LIGHTNING_DISTANCE, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST,
+    CONF_WEATHER, CONF_FORECAST_HIGH, CONF_OUTDOOR_AQI, CONF_OUTDOOR_POLLEN, CONF_OUTDOOR_GAS, CONF_LIGHTNING_DISTANCE, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST,
 )
 # Specific to one room/zone -- configured per Room entry.
 ROOM_ENTITY_KEYS = (

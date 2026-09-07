@@ -23,15 +23,20 @@ def resolve_purifier(snapshot, capabilities, options, ev, sleep=False):
     # anyway needs scrubbing, so the purifier runs hard even if the indoor reading is still
     # clean -- otherwise "seal and purify" seals but never purifies, and infiltrating smoke
     # just accumulates behind closed vents.
-    if aq.seal or aq.purifier_recommended:
-        pressure = max(aq.pressure, 0.66) if aq.seal else aq.pressure
+    # Boost hard only when the purifier can actually help -- a filterable (PM/pollen) seal,
+    # or an ordinary indoor recommendation. During a GAS-only seal the room is shut to keep
+    # the gas out, but a HEPA filter can't remove it, so don't ramp the purifier as if it
+    # could; run it at whatever the indoor air itself warrants.
+    filterable_seal = aq.seal and aq.seal_threat != "gas"
+    if filterable_seal or aq.purifier_recommended:
+        pressure = max(aq.pressure, 0.66) if filterable_seal else aq.pressure
         speed = speed_tier(pressure, 0.66, 0.33)
         if sleep and not aq.seal and speed == "high":
             speed = "medium"  # keep it quieter overnight
         ionizer = ionizer_idle
         if capabilities.ionizer and options.ionizer_mode != IONIZER_NEVER:
             wants_ionizer = (options.ionizer_mode == IONIZER_WITH_PURIFIER
-                             or aq.seal or aq.pressure >= _IONIZER_SURGE)
+                             or filterable_seal or aq.pressure >= _IONIZER_SURGE)
             # An ionizer produces ozone, which is itself a lung irritant. Only run it in an
             # EMPTY room: it should scrub the air while nobody is breathing it, and stand
             # down (leaving the plain purifier running) the moment someone is present. When
