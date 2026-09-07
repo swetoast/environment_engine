@@ -223,15 +223,20 @@ class EnvironmentEngineConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry):
-        return EnvironmentEngineOptionsFlow()
+        return EnvironmentEngineOptionsFlow(config_entry)
 
 
 class EnvironmentEngineOptionsFlow(config_entries.OptionsFlow):
+    """Manage the config entry options."""
+
+    def __init__(self, config_entry) -> None:
+        self._entry = config_entry
+
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(title="", data={**self.config_entry.options, **user_input})
-        current = build_options(self.config_entry.data, self.config_entry.options)
-        if self.config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_GLOBAL:
+            return self.async_create_entry(data={**self._entry.options, **user_input})
+        current = build_options(self._entry.data, self._entry.options)
+        if self._entry.data.get(CONF_ENTRY_TYPE) == ENTRY_GLOBAL:
             schema = _options_schema(_GLOBAL_NUMBER_OPTIONS, current, selects=((OPT_PRICING_MODE, (PRICING_SPOT, PRICING_FIXED)),))
         else:
             schema = _options_schema(_ROOM_NUMBER_OPTIONS, current, booleans=(OPT_AUTO_APPLY, OPT_FAN_COMFORT, OPT_PORTABLE_AC, OPT_QUIET_HOURS, OPT_FORECAST_PRECOOL), times=(OPT_QUIET_START, OPT_QUIET_END), selects=((OPT_IONIZER_MODE, (IONIZER_WITH_PURIFIER, IONIZER_SURGE, IONIZER_NEVER)), (OPT_HUMIDITY_SENSITIVITY, HUMIDITY_SENSITIVITY_LEVELS)))
