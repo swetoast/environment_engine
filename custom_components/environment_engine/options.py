@@ -26,7 +26,7 @@ class EngineOptions:
     sleep_lux: int = 5
     pm25_threshold: int = 50
     pm10_threshold: int = 100
-    lightning_distance: int = 30
+    lightning_distance: int = 40
     air_recovery: int = 10
     presence_hold: int = 5
     filter_life: int = 0
@@ -47,6 +47,20 @@ class EngineOptions:
         # One comfort baseline. The engine derives eco/sleep/away behaviour itself
         # via the target resolver, so there are no separate modes to pick.
         return self.target_temperature
+def _as_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "yes", "on", "1"):
+            return True
+        if normalized in ("false", "no", "off", "0"):
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
 def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -74,9 +88,9 @@ def build_options(data: dict[str, Any], options: dict[str, Any]) -> dict[str, An
 def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOptions:
     merged = build_options(data, options)
     return EngineOptions(
-        auto_apply=bool(merged.get("auto_apply", DEFAULTS["auto_apply"])),
-        update_interval=max(_as_int(merged.get("update_interval"), DEFAULTS["update_interval"]), 15),
-        min_change_interval=max(_as_int(merged.get("min_change_interval"), DEFAULTS["min_change_interval"]), 0),
+        auto_apply=_as_bool(merged.get("auto_apply"), DEFAULTS["auto_apply"]),
+        update_interval=min(max(_as_int(merged.get("update_interval"), DEFAULTS["update_interval"]), 15), 600),
+        min_change_interval=min(max(_as_int(merged.get("min_change_interval"), DEFAULTS["min_change_interval"]), 0), 1800),
         target_temperature=min(max(_as_int(merged.get(OPT_TARGET_TEMPERATURE), DEFAULTS[OPT_TARGET_TEMPERATURE]), 16), 30),
         co2_threshold=max(_as_int(merged.get(OPT_CO2_THRESHOLD), DEFAULTS[OPT_CO2_THRESHOLD]), 1),
         voc_threshold=max(_as_int(merged.get(OPT_VOC_THRESHOLD), DEFAULTS[OPT_VOC_THRESHOLD]), 1),
@@ -86,10 +100,10 @@ def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOpt
         aqi_threshold=max(_as_int(merged.get(OPT_AQI_THRESHOLD), DEFAULTS[OPT_AQI_THRESHOLD]), 1),
         humidity_comfort=min(max(_as_int(merged.get(OPT_HUMIDITY_COMFORT), DEFAULTS[OPT_HUMIDITY_COMFORT]), 30), 90),
         humidity_cooling=min(max(_as_float(merged.get(OPT_HUMIDITY_COOLING), DEFAULTS[OPT_HUMIDITY_COOLING]), 0.0), 3.0),
-        fan_comfort=bool(merged.get(OPT_FAN_COMFORT, DEFAULTS[OPT_FAN_COMFORT])),
+        fan_comfort=_as_bool(merged.get(OPT_FAN_COMFORT), DEFAULTS[OPT_FAN_COMFORT]),
         compressor_min_cycle=max(_as_int(merged.get(OPT_COMPRESSOR_MIN_CYCLE), DEFAULTS[OPT_COMPRESSOR_MIN_CYCLE]), 0),
-        forecast_precool=bool(merged.get(OPT_FORECAST_PRECOOL, DEFAULTS[OPT_FORECAST_PRECOOL])),
-        pollen_threshold=_as_float(merged.get(OPT_POLLEN_THRESHOLD), DEFAULTS[OPT_POLLEN_THRESHOLD]),
+        forecast_precool=_as_bool(merged.get(OPT_FORECAST_PRECOOL), DEFAULTS[OPT_FORECAST_PRECOOL]),
+        pollen_threshold=_clamp_float(_as_float(merged.get(OPT_POLLEN_THRESHOLD), DEFAULTS[OPT_POLLEN_THRESHOLD]), 0.5, 20.0),
         outdoor_aqi_threshold=max(_as_int(merged.get(OPT_OUTDOOR_AQI_THRESHOLD), DEFAULTS[OPT_OUTDOOR_AQI_THRESHOLD]), 1),
         dewpoint_margin=min(max(_as_float(merged.get(OPT_DEWPOINT_MARGIN), DEFAULTS[OPT_DEWPOINT_MARGIN]), 0.0), 6.0),
         # Clamped to the model's reaction radius: offering 100 km in the UI while the
@@ -98,14 +112,14 @@ def resolved_options(data: dict[str, Any], options: dict[str, Any]) -> EngineOpt
         air_recovery=max(_as_int(merged.get(OPT_AIR_RECOVERY), DEFAULTS[OPT_AIR_RECOVERY]), 0),
         presence_hold=max(_as_int(merged.get(OPT_PRESENCE_HOLD), DEFAULTS[OPT_PRESENCE_HOLD]), 0),
         filter_life=max(_as_int(merged.get(OPT_FILTER_LIFE), DEFAULTS[OPT_FILTER_LIFE]), 0),
-        portable_ac=bool(merged.get(OPT_PORTABLE_AC, DEFAULTS[OPT_PORTABLE_AC])),
+        portable_ac=_as_bool(merged.get(OPT_PORTABLE_AC), DEFAULTS[OPT_PORTABLE_AC]),
         vent_revert=max(_as_int(merged.get(OPT_VENT_REVERT), DEFAULTS[OPT_VENT_REVERT]), 0),
         pricing_mode=(merged.get(OPT_PRICING_MODE) if merged.get(OPT_PRICING_MODE) in (PRICING_SPOT, PRICING_FIXED) else DEFAULTS[OPT_PRICING_MODE]),
         device_min_cycle=max(_as_int(merged.get(OPT_DEVICE_MIN_CYCLE), DEFAULTS[OPT_DEVICE_MIN_CYCLE]), 0),
-        quiet_hours=bool(merged.get(OPT_QUIET_HOURS, DEFAULTS[OPT_QUIET_HOURS])),
+        quiet_hours=_as_bool(merged.get(OPT_QUIET_HOURS), DEFAULTS[OPT_QUIET_HOURS]),
         quiet_start=_time_str(merged.get(OPT_QUIET_START), DEFAULTS[OPT_QUIET_START]),
         quiet_end=_time_str(merged.get(OPT_QUIET_END), DEFAULTS[OPT_QUIET_END]),
-        quiet_max_temp=_as_float(merged.get(OPT_QUIET_MAX_TEMP), DEFAULTS[OPT_QUIET_MAX_TEMP]),
+        quiet_max_temp=_clamp_float(_as_float(merged.get(OPT_QUIET_MAX_TEMP), DEFAULTS[OPT_QUIET_MAX_TEMP]), 18.0, 32.0),
         coil_dry_out=max(_as_int(merged.get(OPT_COIL_DRY_OUT), DEFAULTS[OPT_COIL_DRY_OUT]), 0),
         away_max_drift=max(_as_int(merged.get(OPT_AWAY_MAX_DRIFT), DEFAULTS[OPT_AWAY_MAX_DRIFT]), 0),
         humidity_sensitivity=(merged.get(OPT_HUMIDITY_SENSITIVITY) if merged.get(OPT_HUMIDITY_SENSITIVITY) in HUMIDITY_SENSITIVITY_LEVELS else DEFAULTS[OPT_HUMIDITY_SENSITIVITY]),
