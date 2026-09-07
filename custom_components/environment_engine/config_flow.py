@@ -7,7 +7,7 @@ from .const import (
     HUMIDITY_SENSITIVITY_LEVELS, IONIZER_NEVER, IONIZER_SURGE, IONIZER_WITH_PURIFIER, PRICING_FIXED, PRICING_SPOT,
     CONF_AQI, CONF_BLINDS, CONF_CLIMATE, CONF_CO2, CONF_ENTRY_TYPE, CONF_FAN, CONF_FORECAST_HIGH,
     CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_IONIZER, CONF_LUX, CONF_NAME,
-    CONF_LIGHTNING_DISTANCE, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25,
+    CONF_LIGHTNING_DISTANCE, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTDOOR_POLLEN, CONF_OUTDOOR_GAS, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25,
     CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VENTILATION,
     CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT,
     DEFAULTS, DOMAIN, ENTRY_GLOBAL, ENTRY_ROOM, ROOM_ENTITY_KEYS,
@@ -27,6 +27,8 @@ _ENTITY_SPEC = {
     CONF_WEATHER: ("weather", None),
     CONF_FORECAST_HIGH: (["weather", "sensor"], None),
     CONF_OUTDOOR_AQI: ("sensor", None),
+    CONF_OUTDOOR_POLLEN: ("sensor", None),
+    CONF_OUTDOOR_GAS: ("sensor", None),
     CONF_LIGHTNING_DISTANCE: ("sensor", None),
     CONF_PRICE: ("sensor", None),
     CONF_PRICE_AVERAGE: ("sensor", None),
@@ -53,7 +55,7 @@ _ENTITY_SPEC = {
     CONF_OUTLET_OVERLOAD: ("binary_sensor", None),
 }
 # Global entry: one flat form.
-_GLOBAL_FIELDS = (CONF_WEATHER, CONF_FORECAST_HIGH, CONF_OUTDOOR_AQI, CONF_LIGHTNING_DISTANCE, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST)
+_GLOBAL_FIELDS = (CONF_WEATHER, CONF_FORECAST_HIGH, CONF_OUTDOOR_AQI, CONF_OUTDOOR_POLLEN, CONF_OUTDOOR_GAS, CONF_LIGHTNING_DISTANCE, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST)
 # Room entry: grouped into collapsible sections (section_key -> field keys).
 _ROOM_SECTIONS = (
     ("climate_comfort", (CONF_CLIMATE, CONF_TEMPERATURE, CONF_FAN, CONF_BLINDS, CONF_LUX)),
@@ -223,21 +225,39 @@ class EnvironmentEngineConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry):
-        return EnvironmentEngineOptionsFlow(config_entry)
+        """Create the options flow."""
+        return EnvironmentEngineOptionsFlow()
 
 
 class EnvironmentEngineOptionsFlow(config_entries.OptionsFlow):
-    """Manage the config entry options."""
-
-    def __init__(self, config_entry) -> None:
-        self._entry = config_entry
+    """Manage Environment Engine options."""
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(data={**self._entry.options, **user_input})
-        current = build_options(self._entry.data, self._entry.options)
-        if self._entry.data.get(CONF_ENTRY_TYPE) == ENTRY_GLOBAL:
-            schema = _options_schema(_GLOBAL_NUMBER_OPTIONS, current, selects=((OPT_PRICING_MODE, (PRICING_SPOT, PRICING_FIXED)),))
+            return self.async_create_entry(data=user_input)
+
+        current = build_options(self.config_entry.data, self.config_entry.options)
+        if self.config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_GLOBAL:
+            schema = _options_schema(
+                _GLOBAL_NUMBER_OPTIONS,
+                current,
+                selects=((OPT_PRICING_MODE, (PRICING_SPOT, PRICING_FIXED)),),
+            )
         else:
-            schema = _options_schema(_ROOM_NUMBER_OPTIONS, current, booleans=(OPT_AUTO_APPLY, OPT_FAN_COMFORT, OPT_PORTABLE_AC, OPT_QUIET_HOURS, OPT_FORECAST_PRECOOL), times=(OPT_QUIET_START, OPT_QUIET_END), selects=((OPT_IONIZER_MODE, (IONIZER_WITH_PURIFIER, IONIZER_SURGE, IONIZER_NEVER)), (OPT_HUMIDITY_SENSITIVITY, HUMIDITY_SENSITIVITY_LEVELS)))
+            schema = _options_schema(
+                _ROOM_NUMBER_OPTIONS,
+                current,
+                booleans=(
+                    OPT_AUTO_APPLY,
+                    OPT_FAN_COMFORT,
+                    OPT_PORTABLE_AC,
+                    OPT_QUIET_HOURS,
+                    OPT_FORECAST_PRECOOL,
+                ),
+                times=(OPT_QUIET_START, OPT_QUIET_END),
+                selects=(
+                    (OPT_IONIZER_MODE, (IONIZER_WITH_PURIFIER, IONIZER_SURGE, IONIZER_NEVER)),
+                    (OPT_HUMIDITY_SENSITIVITY, HUMIDITY_SENSITIVITY_LEVELS),
+                ),
+            )
         return self.async_show_form(step_id="init", data_schema=schema)
