@@ -257,7 +257,7 @@ Issues and pull requests are welcome. The test suite runs without a Home Assista
 
 ```bash
 python -m pytest tests/ -q
-python -m pyflakes .
+python -m pyflakes custom_components
 ```
 
 ## License
