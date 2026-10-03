@@ -63,8 +63,11 @@ class ThermalMemoryEngine:
             memory.previous_humidity = None
             memory.humidity_trend = 0.0
         else:
-            if memory.previous_humidity is not None:
-                delta = humidity - memory.previous_humidity
+            if memory.previous_humidity is not None and (dt_minutes is None or 0.0 < dt_minutes <= _MAX_GAP_MIN):
+                # Per minute, like the temperature trend. It used to be the raw change per
+                # update, so the same room read as "humidity rising" at a 10 minute update
+                # interval and "steady" at 15 seconds, and a restart gap counted as a jump.
+                delta = (humidity - memory.previous_humidity) / (dt_minutes if dt_minutes else 1.0)
                 memory.humidity_trend = (1 - _SMOOTHING) * memory.humidity_trend + _SMOOTHING * delta
             memory.previous_humidity = humidity
 

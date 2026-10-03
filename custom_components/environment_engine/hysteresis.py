@@ -41,7 +41,7 @@ class HysteresisEngine:
 
     def apply(self, decision: Decision, minimum_interval: int, compressor_min_cycle: int = 0,
               device_min_cycle: int = 0, fan_only_mode: str | None = None,
-              coil_dry_out: int = 0) -> Decision:
+              coil_dry_out: int = 0, compressor_allowed: bool = True) -> Decision:
         if not self._committed or decision.blocked:
             self._commit(decision)
             self.last_decision = decision
@@ -76,6 +76,16 @@ class HysteresisEngine:
                     hvac_mode = fan_only_mode
                 else:
                     hvac_mode = committed_hvac
+        # A hold must never keep the compressor running once it is no longer ALLOWED to run
+        # (an exhaust hose that has just been unvented). The rate limit and the minimum
+        # cycle protect the hardware from flapping; they do not outrank the vent gate. The
+        # executor already refused to send the held mode, but the decision still read
+        # "cool", the unit was switched off instead of dropping to fan_only, and this
+        # engine went on believing the compressor was running.
+        if not compressor_allowed and hvac_mode in _COMPRESSOR:
+            hvac_mode = decision.hvac_mode if decision.hvac_mode not in _COMPRESSOR else HVAC_OFF
+            if hvac_mode is None:
+                hvac_mode = HVAC_OFF
         # Coil dry-out. A coil that has just been condensing water is wet, and a wet coil
         # sitting in a dark box is how a unit starts smelling. Running the blower for a
         # couple of minutes after the compressor stops evaporates it -- this is what the

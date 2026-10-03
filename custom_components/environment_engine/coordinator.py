@@ -100,7 +100,8 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         evaluations = self._evaluate(snapshot, memory)
         raw_decision = Planner(self.capabilities, self.options).plan(snapshot, evaluations)
         fan_only_mode = HVAC_FAN_ONLY if HVAC_FAN_ONLY in snapshot.hvac_modes else None
-        decision = self.hysteresis.apply(raw_decision, self.options.min_change_interval, self.options.compressor_min_cycle, self.options.device_min_cycle, fan_only_mode, self.options.coil_dry_out)
+        decision = self.hysteresis.apply(raw_decision, self.options.min_change_interval, self.options.compressor_min_cycle, self.options.device_min_cycle, fan_only_mode, self.options.coil_dry_out,
+                                         compressor_allowed=not (snapshot.vent_required and not snapshot.vented))
         self.previous_snapshot = snapshot
         self.previous_decision = decision
         active = set()
@@ -134,7 +135,7 @@ class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                       pressure=max(air_quality.pressure, 0.8),
                                       reason="holding seal through an outdoor air-quality lull")
         target = resolve_effective_target(snapshot, memory, {"solar": solar, "energy": energy, "humidity": humidity, "mold": mold, "air_quality": air_quality}, self.options)
-        thermal = evaluate_thermal(snapshot, memory, solar.pressure, energy.penalty, self.thermal.cooling_bias(), target.effective_target, self._anticipation(snapshot))
+        thermal = evaluate_thermal(snapshot, memory, solar.pressure, energy.penalty, self.thermal.cooling_bias(), target.effective_target, self._anticipation(snapshot), base=target.base_target)
         return {"safety": evaluate_safety(snapshot, self.capabilities, self.options), "solar": solar, "energy": energy, "thermal": thermal, "humidity": humidity, "mold": mold, "air_quality": air_quality, "target": target}
 
     async def async_apply_decision(self, decision=None, snapshot=None, force: bool = False) -> None:

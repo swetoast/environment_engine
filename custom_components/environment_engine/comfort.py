@@ -1,23 +1,14 @@
-"""Thermal comfort (pure, no dependencies).
+"""Thermal comfort and humidity context (pure, no dependencies).
 
-Implements Fanger's Predicted Mean Vote and Predicted Percentage Dissatisfied from
-ISO 7730 / ASHRAE 55. These are published standards; this is an independent
-implementation, validated against the CBE Comfort Tool reference values.
+Two things live here, and neither of them controls the temperature:
 
-Why the engine needs this: temperature alone is a poor comfort target. The same 26 C
-is neutral for someone seated in light summer clothing and too warm for someone
-working in long sleeves, and moving air shifts it again. PMV combines air temperature,
-radiant temperature, air speed, humidity, clothing and activity into one number:
+  * Fanger's PMV / PPD (ISO 7730 / ASHRAE 55), an independent implementation. It is
+    shown on the Cooling Demand sensor so you can see how the air reads on the comfort
+    scale. It never picks a setpoint.
+  * The humidity rules: how many whole degrees damp air takes OFF the setpoint, and when
+    DRY mode is worth running.
 
-     PMV  -3 cold  -2 cool  -1 slightly cool  0 neutral  +1 slightly warm  +2 warm  +3 hot
-     PPD  the percentage of people dissatisfied at that PMV (never below 5%)
-
-Controlling to PMV ~ 0 rather than to a fixed setpoint is both more comfortable and
-much cheaper: for light summer clothing PMV = 0 lands near 25.4 C, so cooling a room
-to 21 C is not "more comfortable", it is 51% dissatisfied from being too cold.
-
-PMV is a *population mean*. It cannot represent one person running warm or cold, or
-being unusually sensitive to humidity -- that is what the personal offset is for.
+The user's setpoint is the controller. Context here can only make the engine cool harder.
 """
 from __future__ import annotations
 import math
@@ -121,54 +112,6 @@ def sensation(pmv_value: float | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Standard Effective Temperature (Gagge two-node model) and the cooling effect
-# of moving air.
-#
-# Fanger's PMV takes air speed as an input, but it was validated at low speeds --
-# above roughly 0.2 m/s the convective term is extrapolation, and it steadily
-# understates what a fan achieves (by nearly a full PMV unit at 31 C). ASHRAE 55
-# therefore handles elevated air speed through SET: simulate the body in the real
-# room, then find the still-air temperature that would leave the body in the same
-# state. The difference is the cooling effect -- how many degrees the fan is
-# "worth". That is the number the engine needs to decide whether moving air can
-# stand in for the compressor.
-# ---------------------------------------------------------------------------
-
-
-# Speed tiers the engine can actually ask a fan for, in m/s at the person.
-
-
-# ---------------------------------------------------------------------------
-# The combined model: is the room uncomfortable, and if so is it the heat or the
-# moisture?
-#
-# PMV already answers the first question -- it takes temperature *and* humidity, so
-# it knows that 26 C at 70% is worse than 26 C at 40%. What it will not tell you is
-# which lever to pull. Psychrometrics answers that: hold the moisture and drop the
-# temperature, then hold the temperature and drop the moisture, and see which one
-# actually recovers comfort. Whichever does the work is the thing that was wrong.
-#
-# Cooling removes both (a coil below the dew point condenses water as it chills the
-# air), so it is the general answer. Drying is only the right call when moisture
-# alone is the problem AND the coil can actually condense -- below roughly 12 C dew
-# point there is nothing to squeeze out and DRY mode just burns the compressor.
-# ---------------------------------------------------------------------------
-
-COIL_TEMP_C = 12.0          # typical evaporator surface; below this dew point, DRY does nothing
-
-# PMV includes humidity, but it underweights it at ordinary indoor temperatures: it will
-# happily call 25 C at 90% RH "comfortable" when the dew point is 23 C and the room is
-# clammy and at risk of mould. So moisture gets its own limit, expressed as dew point
-# because that is what people actually feel as sticky and, unlike RH, it does not move
-# when the temperature does.
-#
-#   <=11 C  dry, nobody notices      15-17 C  noticeable, sensitive people react
-#   11-15   comfortable              17-20 C  sticky for most      >20 C  oppressive
-DEW_LIMITS = {"tolerant": 17.0, "normal": 15.0, "sensitive": 13.0, "very_sensitive": 11.0}
-DEFAULT_DEW_LIMIT = 15.0
-
-
-# ---------------------------------------------------------------------------
 # Context for the controller.
 #
 # Temperature is the controller. These functions never choose a temperature and
@@ -181,6 +124,10 @@ DEFAULT_DEW_LIMIT = 15.0
 # ---------------------------------------------------------------------------
 
 COIL_TEMP_C = 12.0        # evaporator surface; below this dew point nothing condenses
+# Dew point, because that is what people feel as sticky and, unlike RH, it does not move
+# when the temperature does.
+#   <=11 C  dry, nobody notices      15-17 C  noticeable, sensitive people react
+#   11-15   comfortable              17-20 C  sticky for most      >20 C  oppressive
 DEW_LIMITS = {"tolerant": 17.0, "normal": 15.0, "sensitive": 13.0, "very_sensitive": 11.0}
 DEFAULT_DEW_LIMIT = 15.0
 _DEW_DEADBAND = 1.5       # how far dew must fall back before DRY releases

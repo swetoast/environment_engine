@@ -48,7 +48,7 @@ _ENTITY_SPEC = {
     CONF_VOC: ("sensor", None),
     CONF_HUMIDITY: ("sensor", "humidity"),
     CONF_HUMIDIFIER: ("humidifier", None),
-    CONF_OCCUPANCY: (["person", "device_tracker", "binary_sensor"], None),
+    CONF_OCCUPANCY: (["person", "device_tracker", "binary_sensor", "input_boolean", "switch"], None),
     CONF_WINDOW: ("binary_sensor", None),
     CONF_VENT: ("binary_sensor", None),
     CONF_SMOKE: ("binary_sensor", "smoke"),

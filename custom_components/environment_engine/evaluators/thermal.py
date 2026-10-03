@@ -7,12 +7,18 @@ class ThermalResult:
     pressure: float
     confidence: float
     reason: str
-def evaluate_thermal(snapshot, memory, solar_pressure: float, energy_penalty: float, learning_bias: float = 0.0, target: float = 22.0, anticipation: float = 0.0) -> ThermalResult:
+def evaluate_thermal(snapshot, memory, solar_pressure: float, energy_penalty: float, learning_bias: float = 0.0, target: float = 22.0, anticipation: float = 0.0, base: float | None = None) -> ThermalResult:
     temp = snapshot.feels_like if snapshot.feels_like is not None else snapshot.indoor_temp
     # Above the setpoint is above the setpoint. The old /10 span meant confidence only
     # reached the 0.3 action threshold at +3 C, so setting 22 did nothing until 25.
     # A 1 C excess now clears it outright.
     excess = 0.0 if temp is None else temp - target
+    # `target` is the DRIVEN setpoint, which on a hot or damp day sits below the number the
+    # user asked for (`base`). That lower number says how hard to cool once cooling; it
+    # does not make a room at or under the user's setpoint warm. Without this the fan ran
+    # at 21.9 C against a 22 C setpoint all afternoon, because the driven setpoint was 21.
+    if base is not None and temp is not None and temp <= base:
+        excess = 0.0
     # Anticipation lets the engine start sooner on a room it has learned warms quickly,
     # but it may only ever LEAD a decision the room is already making -- never make one on
     # its own. Without this guard a confident prediction pushed a room sitting *below* the

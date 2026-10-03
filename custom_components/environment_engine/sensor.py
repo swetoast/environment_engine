@@ -264,7 +264,7 @@ class EnvironmentThermalPressureSensor(EnvironmentEngineEntity, SensorEntity):
             attrs["target_limited_by_device"] = "minimum" if t.limited_by_min else "maximum"
         # Context, not control: how the room reads on the ISO 7730 comfort scale. This
         # never picks a temperature -- it is here so you can see what the air is doing.
-        vote = _pmv(s.indoor_temp, s.humidity)
+        vote = _pmv(s.indoor_temp, s.humidity) if s.temperature_valid else None
         if vote is not None:
             attrs["comfort"] = _sensation(vote)
             attrs["comfort_vote"] = round(vote, 2)

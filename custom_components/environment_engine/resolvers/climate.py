@@ -25,6 +25,7 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
         1. safety blocked                    -> OFF            (handled by the planner)
         2. temperature reading invalid       -> hold, touch nothing
         3. above setpoint, cooling available -> COOL
+           already cooling                   -> keep going down to the driven setpoint
            above setpoint, cooling blocked   -> FAN_ONLY, keep air moving while blocked
         4. at setpoint but air too wet       -> DRY
         5. mould airflow wanted              -> FAN_ONLY
@@ -95,6 +96,18 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
             # A standalone fan is the better air mover and the fan resolver drives it;
             # two fans in one room is just noise.
             return (HVAC_OFF if snapshot.hvac_mode in _MANAGED else None), None, None
+
+    # --- 3b. Already cooling: finish the job down to the driven setpoint ---
+    # Starting is decided against YOUR number (above). Stopping is decided against the
+    # driven one. On a hot or damp day the driven setpoint sits a degree or two lower, and
+    # that drop is meant to make the engine cool harder -- but the unit used to be switched
+    # off the instant the room touched your number, so it never got near the lower one and
+    # the drop did nothing. It also left no gap at all between start and stop, so the
+    # compressor cycled as fast as its minimum-cycle protection allowed. When the driven
+    # setpoint equals yours (a mild day) this branch never fires and nothing changes.
+    elif (snapshot.hvac_mode == HVAC_COOL and can_cool and HVAC_COOL in modes
+          and not passive_cooling and indoor is not None and indoor > target):
+        return HVAC_COOL, target, STRATEGY_COOLING
 
     # --- 4. At or below the setpoint, but the air is too wet ---
     # DRY runs the compressor too, so it obeys the SAME vent gate as cooling. Without this
