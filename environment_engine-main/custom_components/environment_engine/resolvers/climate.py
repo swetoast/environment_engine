@@ -1,0 +1,138 @@
+from __future__ import annotations
+from ..comfort import dehumidify_satisfied, should_dehumidify
+from ..const import (
+    HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, HVAC_OFF,
+    STRATEGY_AIR_CIRCULATION, STRATEGY_COOLING, STRATEGY_DEHUMIDIFY,
+    STRATEGY_MOLD_PREVENTION, STRATEGY_PASSIVE_VENTILATION, STRATEGY_QUIET_COOLING,
+)
+
+# Modes the engine actively manages. It stands these down when there is no demand, but
+# never touches modes it does not manage (e.g. heat), so it won't fight a heating setup.
+_MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
+
+
+def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
+    """Decide the climate actuator. Returns (hvac_mode|None, target|None, driver|None).
+
+    The rule this file exists to enforce: **above the setpoint means cool.** Not humidity,
+    not price, not a comfort model, not a fan that could theoretically make the room feel
+    adequate -- none of them get to override that. The only thing that outranks it is safety.
+
+    Everything else is context, and context may only make the engine cool *harder*, by
+    lowering the setpoint upstream in target_resolver. It never gets to decide the room is
+    fine when the thermometer says otherwise.
+
+        1. safety blocked                    -> OFF            (handled by the planner)
+        2. temperature reading invalid       -> hold, touch nothing
+        3. above setpoint, cooling available -> COOL
+           already cooling                   -> keep going down to the driven setpoint
+           above setpoint, cooling blocked   -> FAN_ONLY, keep air moving while blocked
+        4. at setpoint but air too wet       -> DRY
+        5. mould airflow wanted              -> FAN_ONLY
+        6. otherwise                         -> OFF
+    """
+    if not capabilities.climate or not snapshot.climate_valid:
+        return None, None, None
+    if not snapshot.temperature_valid:
+        # The reading is a placeholder, not a measurement. Acting on it would turn a
+        # happily-cooling unit off on a momentary sensor blip, and anti-short-cycling
+        # would then delay the restart. The AC has its own thermostat; leave it be.
+        return None, None, None
+
+    modes = snapshot.hvac_modes
+    mold = ev["mold"]
+    # Two different numbers, deliberately:
+    #   base   -- the temperature YOU asked for. Decides whether the room is too warm.
+    #   target -- that, minus context (heat, sun, damp air, cheap power). Decides how
+    #             hard to drive the unit once it is running.
+    # Testing "too warm" against the driven-down number would be circular: the damp
+    # penalty would lower the setpoint, that would make the room "above target", and DRY
+    # could never fire because cooling always won.
+    base = ev["target"].base_target if "target" in ev else int(options.target)
+    target = ev["target"].effective_target if "target" in ev else int(options.target)
+    result = ev.get("target")
+    stop_at = getattr(result, "stop_at", None)
+    stop_at = float(target) if stop_at is None else stop_at
+    sent = getattr(result, "unit_setpoint", None)
+    sent = target if sent is None else sent
+    indoor = snapshot.indoor_temp
+    above_target = indoor is not None and indoor > base
+    # An opted-in pre-cool (forecast heat, or a warm night ahead of quiet hours) may start
+    # a cycle before the room is above the setpoint. Nothing else can.
+    precooling = (getattr(result, "precool_active", False) and not above_target
+                  and indoor is not None and indoor > target)
+
+    # THE VENT GATE. The compressor (cool and dry both run it) must NOT run until the
+    # exhaust hose is confirmed vented -- otherwise it dumps condenser heat straight into
+    # the room, which is worse than doing nothing. A vent gate applies when EITHER the unit
+    # is marked portable in options OR a vent sensor is wired; the previous code keyed only
+    # off the portable option, so a room with a vent sensor but the box unticked would cool
+    # unvented. `snapshot.vented` is true only via that sensor or the manual Exhaust Vented
+    # switch, which defaults OFF -- the safe state.
+    vent_required = options.portable_ac or capabilities.vent_sensor
+    vented_ok = not vent_required or snapshot.vented
+    temp = snapshot.feels_like if snapshot.feels_like is not None else indoor
+    too_hot_to_stay_quiet = temp is not None and temp >= options.quiet_max_temp
+    quiet = snapshot.quiet and not too_hot_to_stay_quiet
+    can_cool = vented_ok and not quiet
+
+    # When the compressor is blocked and the room is still hot, the AC's own fan_only is
+    # standing in for cooling it cannot do -- so it runs even alongside a standalone fan,
+    # because every air mover helps and fan_only costs nothing but a little noise. It makes
+    # no difference *why* the compressor is blocked: quiet hours and an unvented portable
+    # are the same situation, and treating them differently was an arbitrary split.
+    # (fan_only on an unvented portable is harmless: no compressor, so no condenser heat.)
+    #
+    # Outside that, the AC only fans when it is the room's only air mover -- two fans in one
+    # room is just noise. A standalone fan that is configured but offline is not an air
+    # mover, so the AC takes over rather than both sitting idle and leaving the room still.
+    standalone_fan = capabilities.fan and snapshot.fan_available
+    compressor_blocked = not can_cool
+    ac_fan_ok = HVAC_FAN_ONLY in modes and (compressor_blocked or not standalone_fan)
+
+    # --- 3. Above the setpoint: cool, or keep air moving if the compressor is blocked ---
+    if above_target:
+        # Free cooling first: if the outside air is doing the work through an open
+        # window, spending compressor energy on top of it is just waste.
+        if passive_cooling and HVAC_FAN_ONLY in modes:
+            return HVAC_FAN_ONLY, None, STRATEGY_PASSIVE_VENTILATION
+        if can_cool and HVAC_COOL in modes:
+            return HVAC_COOL, sent, STRATEGY_COOLING
+        if ac_fan_ok:
+            return HVAC_FAN_ONLY, None, (STRATEGY_QUIET_COOLING if quiet
+                                               else STRATEGY_AIR_CIRCULATION)
+        if standalone_fan:
+            # A standalone fan is the better air mover and the fan resolver drives it;
+            # two fans in one room is just noise.
+            return (HVAC_OFF if snapshot.hvac_mode in _MANAGED else None), None, None
+
+    # --- 3b. Already cooling: finish the job; or an opted-in pre-cool starts one ---
+    # Starting is decided against YOUR number (above). Stopping is decided against
+    # `stop_at`: the driven setpoint on a hot or damp day, or a little under your number on
+    # a mild one (a gap learned from how fast this room regains heat). Without it the unit
+    # was switched off the instant the room touched your number, so the lowered setpoint did
+    # nothing and the compressor cycled as fast as its protection allowed.
+    elif (can_cool and HVAC_COOL in modes and not passive_cooling and indoor is not None
+          and ((snapshot.hvac_mode == HVAC_COOL and indoor > stop_at) or precooling)):
+        return HVAC_COOL, sent, STRATEGY_COOLING
+
+    # --- 4. At or below the setpoint, but the air is too wet ---
+    # DRY runs the compressor too, so it obeys the SAME vent gate as cooling. Without this
+    # an unvented portable would dehumidify -- dumping condenser heat into the room -- and,
+    # worse, the "already drying" branch would keep it running once started.
+    elif (vented_ok and capabilities.humidity and not capabilities.humidifier
+          and HVAC_DRY in modes):
+        already_drying = snapshot.hvac_mode == HVAC_DRY
+        if already_drying and not dehumidify_satisfied(snapshot, options):
+            return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
+        if not already_drying and should_dehumidify(snapshot, options, True):
+            return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
+
+    # --- 5. Circulation against mould ---
+    if mold.airflow_recommended and ac_fan_ok:
+        return HVAC_FAN_ONLY, None, STRATEGY_MOLD_PREVENTION
+
+    # --- 6. Nothing to do ---
+    if snapshot.hvac_mode in _MANAGED:
+        return HVAC_OFF, None, None
+    return None, None, None

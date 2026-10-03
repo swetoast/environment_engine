@@ -1,0 +1,703 @@
+from __future__ import annotations
+import logging
+from datetime import timedelta
+from typing import Any
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
+from .adaptive_learning import AdaptiveLearning
+from .air_model import AirModel
+from .thermal_model import ThermalModel
+from .capabilities import build_capabilities
+from .const import CONF_AQI, CONF_FAN, CONF_BLINDS, CONF_ENTRY_TYPE, ENTRY_GLOBAL, ENTRY_ROOM, CONF_CLIMATE, CONF_CO2, CONF_FORECAST_HIGH, CONF_HUMIDIFIER, CONF_HUMIDITY, CONF_LIGHTNING_DISTANCE, CONF_LUX, CONF_OCCUPANCY, CONF_OUTDOOR_AQI, CONF_OUTDOOR_POLLEN, CONF_OUTDOOR_GAS, CONF_OUTLET_OVERLOAD, CONF_PM10, CONF_PM25, CONF_PRICE, CONF_PRICE_AVERAGE, CONF_PRICE_FORECAST, CONF_PURIFIER, CONF_SMOKE, CONF_TEMPERATURE, CONF_VOC, CONF_WEATHER, CONF_WINDOW, CONF_VENT, CONF_VENTILATION, DOMAIN, ENTITY_KEYS, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, CONF_IONIZER
+from .entities import as_list
+from .evaluators import hold_after_event, evaluate_air_quality, evaluate_energy, evaluate_humidity, evaluate_mold, evaluate_safety, evaluate_solar, evaluate_thermal
+from .executors import EnvironmentExecutor
+from .forecast import heat_outlook, upcoming_peak
+from .hysteresis import HysteresisEngine
+from dataclasses import replace as _dc_replace
+from .decay import PeakDecay
+from .lightning import lightning_band, lightning_hold
+from .options import build_options, resolved_options
+from .const import PRICING_SPOT as _PRICING_SPOT
+from .price import day_values, in_cheapest_window, price_rank as _price_rank, price_series
+from .psychrometrics import feels_like as _feels_like
+from .quiet_hours import in_quiet_hours, minutes_until, window_minutes
+from .runtime import RuntimeTracker
+from .planner import Planner
+from .presets import preset_fraction
+from .snapshot import Snapshot
+from .target_resolver import resolve_effective_target
+from .thermal_memory import ThermalMemoryEngine
+from .units import to_celsius
+_LOGGER = logging.getLogger(__name__)
+_UNSET = ("unknown", "unavailable", "")
+_MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
+
+
+class EnvironmentCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    def __init__(self, hass, entry) -> None:
+        self.hass = hass  # needed by _refresh_config -> _global_entry before super().__init__
+        self.entry = entry
+        self._refresh_config()
+        self.memory_engine = ThermalMemoryEngine()
+        self.hysteresis = HysteresisEngine()
+        self.learning = AdaptiveLearning()
+        self.thermal = ThermalModel()
+        self.air = AirModel()
+        self._model_store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.thermal")
+        self._last_update_ts = None
+        self.aq_memory = PeakDecay()
+        self.seal_memory = PeakDecay()
+        self.presence_memory = PeakDecay()
+        self.runtime = RuntimeTracker()
+        self.vent_override = False  # manual portable-AC exhaust-vented toggle
+        self.executor = EnvironmentExecutor(hass, self.config)
+        self.previous_snapshot = None
+        self.previous_decision = None
+        self._auto_apply_pending = False
+        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=timedelta(seconds=self.options.update_interval), config_entry=entry)
+        self._remove_auto_apply_listener = self.async_add_listener(self._handle_update_finished)
+
+    def _refresh_config(self) -> None:
+        data = dict(self.entry.data)
+        options = dict(self.entry.options)
+        if self.entry.data.get(CONF_ENTRY_TYPE) == ENTRY_ROOM:
+            shared = self._global_entry()
+            if shared is not None:
+                data = {**shared.data, **data}        # room overrides global on conflict
+                options = {**shared.options, **options}
+        self.config = build_options(data, options)
+        self.options = resolved_options(data, options)
+        self.capabilities = build_capabilities(self.config)
+
+    def _global_entry(self):
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_GLOBAL:
+                return entry
+        return None
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        self._refresh_config()
+        self.executor.config = self.config
+        snapshot = self._snapshot()
+        self.learning.update(self.previous_snapshot, self.previous_decision, snapshot)
+        _now_ts = dt_util.utcnow().timestamp()
+        _dt_min = (_now_ts - self._last_update_ts) / 60.0 if self._last_update_ts is not None else 0.0
+        self._last_update_ts = _now_ts
+        # Learn from what the devices actually did over the interval, read back from their
+        # own state, not from what the engine decided. The decision is wrong in three common
+        # cases: Auto Apply is off (nothing was sent), a device was switched by hand, and the
+        # purifier's dead band (the decision says "no change" while the purifier keeps
+        # running, which the air model then booked as cleaning with the purifier off).
+        was_cooling = snapshot.compressor_running
+        learned = self.thermal.update(self.previous_snapshot, snapshot, _dt_min, was_cooling,
+                                      self._solar_proxy(self.previous_snapshot), hour=dt_util.now().hour)
+        self.thermal.observe_unit_sensor(snapshot.sensor_offset, was_cooling)
+        learned |= self.air.update(self.previous_snapshot, snapshot, _dt_min, snapshot.purifier_level)
+        if learned:
+            self._save_model()
+        memory = self.memory_engine.update(snapshot.indoor_temp, snapshot.humidity, snapshot.outdoor_temp,
+                                          snapshot.temperature_valid, _dt_min)
+        evaluations = self._evaluate(snapshot, memory)
+        raw_decision = Planner(self.capabilities, self.options).plan(snapshot, evaluations)
+        fan_only_mode = HVAC_FAN_ONLY if HVAC_FAN_ONLY in snapshot.hvac_modes else None
+        decision = self.hysteresis.apply(raw_decision, self.options.min_change_interval, self.options.compressor_min_cycle, self.options.device_min_cycle, fan_only_mode, self.options.coil_dry_out,
+                                         compressor_allowed=not (snapshot.vent_required and not snapshot.vented))
+        self.previous_snapshot = snapshot
+        self.previous_decision = decision
+        active = set()
+        if any(st.state in ("cool", "dry", "fan_only", "heat") for st in self._usable(self._states(CONF_CLIMATE))):
+            active.add("climate")
+        if any(st.state == "on" for st in self._states(CONF_PURIFIER)):
+            active.add("purifier")
+        self.runtime.update(dt_util.utcnow().timestamp(), active, dt_util.now().date().isoformat())
+        self._auto_apply_pending = bool(self.options.auto_apply)
+        return {"snapshot": snapshot, "memory": memory, "evaluations": evaluations, "decision": decision, "raw_decision": raw_decision, "capabilities": self.capabilities, "learning": self.learning.state, "runtime": {"climate": self.runtime.hours("climate"), "purifier": self.runtime.hours("purifier")}, "runtime_today": {"climate": self.runtime.today_hours("climate"), "purifier": self.runtime.today_hours("purifier")}}
+
+    def _handle_update_finished(self) -> None:
+        if self._auto_apply_pending and self.data:
+            self._auto_apply_pending = False
+            self.hass.async_create_task(self.async_apply_decision())
+
+    def _evaluate(self, snapshot: Snapshot, memory) -> dict[str, Any]:
+        solar = evaluate_solar(snapshot, self.options)
+        energy = evaluate_energy(snapshot, self.options)
+        humidity = evaluate_humidity(snapshot, memory, self.learning.drying_bias())
+        mold = evaluate_mold(snapshot, memory)
+        air_quality = evaluate_air_quality(snapshot, self.options)
+        now = dt_util.utcnow().timestamp()
+        half_life = self.options.air_recovery * 60
+        air_quality = hold_after_event(air_quality, self.aq_memory, now, half_life)
+        # Seal hold: once an outdoor event seals the room, keep it sealed through a
+        # lull (decaying) so it doesn't flap around the threshold. New highs re-tighten.
+        held_outdoor = self.seal_memory.update(snapshot.outdoor_aqi or 0.0, now, half_life)
+        if not air_quality.seal and held_outdoor >= self.options.outdoor_aqi_threshold:
+            air_quality = _dc_replace(air_quality, seal=True, indoor_event=False, purifier_recommended=True,
+                                      pressure=max(air_quality.pressure, 0.8),
+                                      reason="holding seal through an outdoor air-quality lull")
+        target = resolve_effective_target(snapshot, memory, {"solar": solar, "energy": energy, "humidity": humidity, "mold": mold, "air_quality": air_quality}, self.options)
+        thermal = evaluate_thermal(snapshot, memory, solar.pressure, energy.penalty, self.thermal.cooling_bias(), target.effective_target, self._anticipation(snapshot), base=target.base_target)
+        return {"safety": evaluate_safety(snapshot, self.capabilities, self.options), "solar": solar, "energy": energy, "thermal": thermal, "humidity": humidity, "mold": mold, "air_quality": air_quality, "target": target}
+
+    async def async_apply_decision(self, decision=None, snapshot=None, force: bool = False) -> None:
+        if not self.data:
+            return
+        await self.executor.apply(snapshot if snapshot is not None else self.data["snapshot"], decision if decision is not None else self.data["decision"], force=force)
+
+    def reset_learning(self) -> None:
+        """Forget everything the engine has learned about this room.
+
+        Resets all three learners, not just the drying counter -- the button says "Reset
+        Learning", and leaving the fitted thermal and air models in place would make it a
+        lie. The persisted copy is overwritten too, otherwise the old fit would simply
+        come back on the next restart.
+        """
+        self.learning.reset()
+        self.thermal = ThermalModel()
+        self.air = AirModel()
+        self._save_model()
+        _LOGGER.debug("Learning reset: thermal model, air model and drying counters cleared")
+
+    def unload(self) -> None:
+        remove = getattr(self, "_remove_auto_apply_listener", None)
+        if remove:
+            remove()
+
+    # --- multi-entity state readers (every slot is a list) ---
+    def _states(self, key: str):
+        return [s for eid in as_list(self.config.get(key)) if (s := self.hass.states.get(eid)) is not None]
+
+    @staticmethod
+    def _usable(states):
+        return [s for s in states if s.state not in _UNSET]
+
+    @staticmethod
+    def _attr(state, name: str, default=None):
+        return state.attributes.get(name, default) if state is not None else default
+
+    def _celsius_attr(self, state, name: str, unit):
+        value = self._attr(state, name)
+        try:
+            return to_celsius(float(value), unit) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _floats(self, key: str, temperature: bool = False):
+        out = []
+        for s in self._usable(self._states(key)):
+            try:
+                value = float(s.state)
+            except (TypeError, ValueError):
+                continue
+            out.append(to_celsius(value, self._attr(s, "unit_of_measurement")) if temperature else value)
+        return out
+
+    def _mean(self, key: str, temperature: bool = False):
+        vals = self._floats(key, temperature)
+        return sum(vals) / len(vals) if vals else None
+
+    def _max(self, key: str):
+        vals = self._floats(key)
+        return max(vals) if vals else None
+
+    def _lightning(self):
+        """If a Blitzortung sensor is configured (confirming the integration is
+        installed), scan its per-strike geo_location.lightning_strike_* entities and
+        compute the dynamic hold. Returns (hold, closest_km, strikes)."""
+        if not self.capabilities.lightning:
+            return False, None, 0
+        now = dt_util.utcnow().timestamp()
+        seen, distances, ages = set(), [], []
+        for state in self.hass.states.async_all("geo_location"):
+            if "lightning" not in state.entity_id and self._attr(state, "source") != "blitzortung":
+                continue
+            external_id = self._attr(state, "external_id", state.entity_id)
+            if external_id in seen:
+                continue
+            seen.add(external_id)
+            try:
+                distance = float(state.state)
+            except (TypeError, ValueError):
+                continue
+            if self._attr(state, "unit_of_measurement") in ("mi", "miles"):
+                distance *= 1.609344
+            published = self._attr(state, "publication_date")
+            if isinstance(published, (int, float)):
+                timestamp = float(published)
+            elif published is not None:
+                parsed = dt_util.parse_datetime(str(published))
+                timestamp = parsed.timestamp() if parsed else None
+            else:
+                timestamp = None
+            if timestamp is None:
+                continue
+            distances.append(distance)
+            ages.append(now - timestamp)
+        return lightning_hold(distances, ages, self.options.lightning_distance)
+
+    def _any_on(self, key: str) -> bool:
+        return any(s.state == "on" for s in self._states(key))
+
+    def _any_triggered(self, key: str) -> bool:
+        """Like _any_on, but for SAFETY sensors -- fire on any state that means 'active'.
+        Smoke and overload integrations variously report `on`, `detected`, or `true`; a
+        safety block must catch all of them rather than only the literal `on`. Kept
+        separate from _any_on so a window contact never treats `detected` as open."""
+        active = {"on", "detected", "true", "1", "alarm", "overload", "tripped"}
+        return any(str(s.state).strip().lower() in active for s in self._states(key))
+
+    def _occupied(self, key: str) -> bool:
+        usable = self._usable(self._states(key))
+        if not usable:
+            return True  # no presence info -> assume occupied
+        # `on` covers binary sensors, switches and helpers; `home` covers person and
+        # device_tracker. Keying this on the domain meant an input_boolean or a template
+        # switch used for presence could never report anyone home.
+        return any(str(s.state).strip().lower() in ("on", "home") for s in usable)
+
+    def _occupied_held(self):
+        """Occupancy with a debounce hold: stays occupied for a decaying window after
+        the last detection, so a person sitting still doesn't flip the room to away."""
+        raw = self._occupied(CONF_OCCUPANCY)
+        held = self.presence_memory.update(1.0 if raw else 0.0, dt_util.utcnow().timestamp(), self.options.presence_hold * 60)
+        return held >= 0.5
+
+    def _invalid(self, key: str):
+        reasons = []
+        # The lightning distance sensor is only a "Blitzortung is installed" marker --
+        # its value is never used (geo_location strikes provide the data), and it rests
+        # at unknown/unavailable whenever there's no recent strike. So flag it only if
+        # the entity is genuinely missing, never for a resting state.
+        skip_states = key == CONF_LIGHTNING_DISTANCE
+        for eid in as_list(self.config.get(key)):
+            state = self.hass.states.get(eid)
+            if state is None:
+                reasons.append(f"{eid} (missing)")
+            elif not skip_states and state.state in _UNSET:
+                reasons.append(f"{eid} ({state.state})")
+        return reasons
+
+    def _actuator_conflicts(self):
+        """Flag an actuator entity wired into more than one control slot. Fan, purifier,
+        humidifier and climate all issue independent commands; the same entity in two of
+        them means two resolvers fight over it -- the fan resolver could turn a device on
+        while the purifier resolver turns it off. Both a fan and a purifier live in the
+        Home Assistant `fan` domain, so this is an easy mistake to make. It is a config
+        error rather than an engine fault, but the engine should say so plainly instead of
+        behaving erratically."""
+        actuator_keys = (CONF_CLIMATE, CONF_PURIFIER, CONF_FAN, CONF_HUMIDIFIER, CONF_VENTILATION, CONF_IONIZER, CONF_BLINDS)
+        seen, conflicts = {}, []
+        for key in actuator_keys:
+            for eid in as_list(self.config.get(key)):
+                if eid in seen and seen[eid] != key:
+                    conflicts.append(f"{eid} (in both {seen[eid]} and {key}; {seen[eid]} controls it)")
+                else:
+                    seen[eid] = key
+        return conflicts
+
+    @staticmethod
+    def _parse_dt(value):
+        if value is None:
+            return None
+        try:
+            return dt_util.parse_datetime(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _forecast_peak(self, key, hours=4):
+        """Worst forecast value over the next `hours`, across all sensors in `key`.
+
+        Handles both attribute shapes seen in the wild: Open-Meteo air-quality sensors use
+        `hourly_forecast` with `datetime`/`value`; pollen sensors use `next_24_hours` with
+        `time`/`value` (and a ready-made `next_24_hours_max`). Lets the engine act *before*
+        the outdoor air turns bad -- air out ahead of a pollen peak, seal ahead of smoke --
+        rather than only reacting once it has already arrived.
+        """
+        # Compare on tz-aware datetimes, not raw epoch seconds. A forecast entry like
+        # "2026-09-07T15:00" carries no offset; calling .timestamp() on it would silently
+        # assume the HA HOST's local zone, so on a UTC host reading a local forecast every
+        # entry drifted by the local offset and the "soon" peak looked at the wrong hours.
+        # Normalise a naive entry to the same clock as `now` -- what forecast.py already
+        # does -- so the horizon holds regardless of the host timezone.
+        from .forecast import _normalize_datetime, _comparison_timezone
+        now = dt_util.now()
+        tz = _comparison_timezone(now)
+        now = _normalize_datetime(now, tz)
+        horizon = now + timedelta(hours=hours)
+        worst = None
+        for s in self._usable(self._states(key)):
+            series = self._attr(s, "hourly_forecast") or self._attr(s, "next_24_hours") or []
+            for item in series:
+                if not isinstance(item, dict):
+                    continue
+                when = self._parse_dt(item.get("datetime") or item.get("time"))
+                if when is None:
+                    continue
+                when = _normalize_datetime(when, tz)
+                value = self._as_float(item.get("value"))
+                if value is not None and now <= when <= horizon:
+                    worst = value if worst is None else max(worst, value)
+        return worst
+
+    def _outdoor_aqi_soon(self):
+        return self._forecast_peak(CONF_OUTDOOR_AQI)
+
+    def _worst_now(self, key):
+        """Worst current state across all sensors wired into `key` -- e.g. the highest of
+        five pollen species, or of several outdoor gas sensors."""
+        vals = [self._as_float(s.state) for s in self._usable(self._states(key))]
+        vals = [v for v in vals if v is not None]
+        return max(vals) if vals else None
+
+    def _forecast_high(self, system_unit):
+        """Highest upcoming peak across all configured forecast/weather sources."""
+        peaks = []
+        for state in self._states(CONF_FORECAST_HIGH):
+            entries = self._attr(state, "forecast")
+            if isinstance(entries, list) and entries:
+                unit = self._attr(state, "temperature_unit") or system_unit
+                peak = to_celsius(upcoming_peak(entries, dt_util.now()), unit)
+            else:
+                try:
+                    peak = to_celsius(float(state.state), self._attr(state, "unit_of_measurement") or system_unit)
+                except (TypeError, ValueError):
+                    peak = None
+            if peak is not None:
+                peaks.append(peak)
+        return max(peaks) if peaks else None
+
+    def _precool_opportunity(self, system_unit):
+        """The forecast-coupled precool signal, only when the user has opted in. Ties the
+        weather forecast curve to the price forecast: bank cooling now only if heat is
+        genuinely coming later AND now is cheaper than then. Off by default, because it runs
+        the compressor while the room is not yet hot -- a deliberate bet the user must
+        choose, never a surprise."""
+        if not self.options.forecast_precool:
+            return 0.0
+        from .forecast import precool_opportunity
+        # Forecast entries are local wall-clock without an offset; compare against a
+        # local-aware clock so a naive "15:00" normalises to 15:00 LOCAL, not 15:00 UTC.
+        now = dt_util.now()
+        # Weather forecast curve, in its own unit, from the forecast/weather source.
+        forecast, unit = None, system_unit
+        for state in self._states(CONF_FORECAST_HIGH):
+            entries = self._attr(state, "forecast")
+            if isinstance(entries, list) and entries:
+                forecast = entries
+                unit = self._attr(state, "temperature_unit") or system_unit
+                break
+        if not forecast:
+            return 0.0
+        # Price series over the horizon, or None (spot forecast absent -> heat curve alone).
+        prices = None
+        if self.options.pricing_mode == _PRICING_SPOT:
+            for state in self._states(CONF_PRICE_FORECAST) or self._states(CONF_PRICE):
+                pts = price_series(state.attributes, now)
+                if pts:
+                    prices = pts
+                    break
+        return precool_opportunity(forecast, prices, now, float(self.options.target), unit)
+
+    def _forecast_pressure(self, system_unit):
+        """Weighted upcoming-heat pressure (how hot/soon/sustained) across sources."""
+        best = 0.0
+        for state in self._states(CONF_FORECAST_HIGH):
+            entries = self._attr(state, "forecast")
+            if isinstance(entries, list) and entries:
+                unit = self._attr(state, "temperature_unit") or system_unit
+                best = max(best, heat_outlook(entries, dt_util.now(), float(self.options.target), unit))
+        return best
+
+    async def async_load_model(self) -> None:
+        """Reload what the room taught us last time. Days of learning shouldn't be thrown
+        away by a restart -- and it's only ~1 kB, because a recursive fit keeps the lessons,
+        never the samples."""
+        try:
+            stored = await self._model_store.async_load()
+        except Exception:  # a corrupt store must never block startup; re-learning is safe
+            _LOGGER.debug("Could not load the thermal model; starting fresh")
+            return
+        if not stored:
+            return
+        if self.thermal.restore(stored.get("thermal")):
+            _LOGGER.debug("Restored thermal model (%s samples)", self.thermal.samples)
+        drying = stored.get("drying")
+        if isinstance(drying, dict):
+            try:
+                self.learning.state.drying_successes = int(drying.get("successes", 0))
+                self.learning.state.drying_failures = int(drying.get("failures", 0))
+            except (TypeError, ValueError):
+                pass
+        if self.air.restore(stored.get("air")):
+            _LOGGER.debug("Restored air model (%s samples)", self.air.samples)
+
+    def _save_model(self) -> None:
+        """Debounced write -- the coordinator runs every minute, the disk shouldn't."""
+        self._model_store.async_delay_save(lambda: {
+            "thermal": self.thermal.as_dict(), "air": self.air.as_dict(),
+            "drying": {"successes": self.learning.state.drying_successes, "failures": self.learning.state.drying_failures},
+        }, 300)
+
+    @staticmethod
+    def _solar_proxy(snapshot) -> float:
+        """0..1 'how much sun is landing on this room' -- measured lux when there is a
+        sensor, otherwise the sun's height in the sky."""
+        if snapshot is None:
+            return 0.0
+        if snapshot.lux is not None:
+            return min(max(snapshot.lux, 0.0) / 50000.0, 1.0)
+        if snapshot.sun_up and snapshot.sun_elevation is not None:
+            return min(max(snapshot.sun_elevation, 0.0) / 60.0, 1.0)
+        return 0.0
+
+    def _anticipation(self, snapshot) -> float:
+        """How much warmer the room will be shortly if left alone, from the learned model
+        (or its context-bucket fallback while the model is still warming up)."""
+        return self.thermal.anticipation(
+            snapshot.indoor_temp, snapshot.outdoor_temp,
+            solar=self._solar_proxy(snapshot), sun_up=bool(snapshot.sun_up),
+            occupied=bool(snapshot.occupancy), hour=self._sun_hour(snapshot.lux),
+        )
+
+    @staticmethod
+    def _sun_hour(lux):
+        """The hour to look up learned sun gain for, or None when light is MEASURED. A lux
+        sensor reports what the sun is doing today; the learned hour-of-day profile is only
+        the stand-in for rooms without one."""
+        if lux is not None:
+            return None
+        now = dt_util.now()
+        return now.hour + now.minute / 60.0
+
+    def _rewarm_rate(self, indoor, outdoor, lux, sun_up, sun_elevation, occupied) -> float:
+        """°C per minute the room regains at the setpoint with the AC off, from the learned
+        model. Zero until the model is trusted, so the stop gap it feeds stays off."""
+        if self.thermal.confidence < 0.5 or outdoor is None or indoor is None:
+            return 0.0
+        solar = self._solar_proxy(type("S", (), {"lux": lux, "sun_up": sun_up, "sun_elevation": sun_elevation})())
+        hour = self._sun_hour(lux)
+        rate = self.thermal.drift(float(self.options.target), outdoor, solar, False, bool(occupied),
+                                  None if hour is None else int(hour))
+        return max(0.0, rate) * self.thermal.confidence
+
+    def _quiet_precool(self, indoor, outdoor) -> float:
+        """1.0 when the opted-in quiet pre-cool should run now, else 0.0.
+
+        Two learned numbers decide it. WHETHER: the model predicts the room, left alone for
+        the length of the quiet window, would pass the quiet-hours limit. WHEN: no earlier
+        than the unit needs to bank the pre-cool, from its measured cooling rate. Nothing
+        happens until the model is trusted.
+        """
+        options = self.options
+        if not (options.quiet_precool and options.quiet_hours) or indoor is None or outdoor is None:
+            return 0.0
+        model = self.thermal
+        if model.confidence < 0.5 or model.cooling_power >= -1e-4:
+            return 0.0
+        now = dt_util.now().time()
+        if in_quiet_hours(now, options.quiet_start, options.quiet_end):
+            return 0.0
+        until = minutes_until(now, options.quiet_start)
+        length = window_minutes(options.quiet_start, options.quiet_end)
+        if until is None or length is None:
+            return 0.0
+        lead = min(max(2.0 / -model.cooling_power, 15.0), 180.0)       # minutes to bank two degrees
+        if until > lead:
+            return 0.0
+        start_hour = (dt_util.now().hour + dt_util.now().minute / 60.0 + until / 60.0) % 24
+        night = model.predict(indoor, outdoor, 0.0, minutes=min(length, 720.0), step=15.0, occupied=True, hour=start_hour)
+        return 1.0 if night is not None and night >= options.quiet_max_temp else 0.0
+
+    def _price_signals(self):
+        """(rank 0..1, precool_ok) from the price sensor's forecast attributes.
+        Rank is the current price's percentile within the upcoming day; precool_ok is
+        True when now is the cheapest upcoming window. Falls back (no forecast) to
+        cheap = at/below the daily average."""
+        if self.options.pricing_mode != _PRICING_SPOT:
+            return None, True  # fixed price: no time-of-use games, precool freely for comfort
+        current = self._mean(CONF_PRICE)
+        if current is None:
+            return None, False
+        # Forecast arrays live on a dedicated sensor for some integrations (Elpriset)
+        # and on the price sensor itself for others (Nordpool); try both.
+        attributes = {}
+        for key in (CONF_PRICE_FORECAST, CONF_PRICE):
+            found = False
+            for state in self._usable(self._states(key)):
+                attributes = state.attributes
+                found = True
+                break
+            if found and (price_series(attributes, dt_util.now()) or day_values(attributes, dt_util.now())):
+                break
+        now = dt_util.now()
+        today = day_values(attributes, now)
+        upcoming = price_series(attributes, now)
+        if today or upcoming:
+            rank = _price_rank(current, today if today else [v for _, v in upcoming])
+            # Bank coolth only in the cheapest upcoming window AND when it's genuinely
+            # cheap (at/below the day's median) -- not merely the least-bad pricey hour.
+            precool = in_cheapest_window(upcoming, now) and (rank is None or rank <= 0.5)
+            return rank, precool
+        average = self._mean(CONF_PRICE_AVERAGE)
+        return None, (average is None or current <= average)
+
+    def _compressor_running(self, climates) -> bool:
+        """Is any unit actually running its compressor right now. `hvac_action` is the
+        truth when the integration reports it (a unit in `cool` that has reached its
+        setpoint is idle); the mode is the fallback when it does not."""
+        for s in climates:
+            action = self._attr(s, "hvac_action")
+            if action is not None:
+                if action in ("cooling", "drying"):
+                    return True
+            elif s.state in (HVAC_COOL, HVAC_DRY):
+                return True
+        return False
+
+    def _purifier_level(self) -> float:
+        """The purifier's real airflow as a 0..1 fraction, from its own state: its
+        percentage when it reports one, else its preset mapped to a tier, else a middle
+        value for a plain on/off unit. The strongest of several purifiers."""
+        level = 0.0
+        for s in self._usable(self._states(CONF_PURIFIER)):
+            if s.state != "on":
+                continue
+            pct = self._as_float(self._attr(s, "percentage"))
+            if pct is not None and pct > 0:
+                level = max(level, min(pct / 100.0, 1.0))
+            else:
+                level = max(level, preset_fraction(self._attr(s, "preset_mode")))
+        return level
+
+    def _aqi(self):
+        """Worst (highest) AQI and its dominant factor across all AQI sensors."""
+        best = None
+        dominant = None
+        for s in self._usable(self._states(CONF_AQI)):
+            try:
+                value = float(s.state)
+            except (TypeError, ValueError):
+                continue
+            if best is None or value > best:
+                best = value
+                dominant = self._attr(s, "dominant_factor")
+        return best, dominant
+
+    def _snapshot(self) -> Snapshot:
+        try:
+            system_unit = self.hass.config.units.temperature_unit
+        except AttributeError:
+            system_unit = "°C"
+        indoor = self._mean(CONF_TEMPERATURE, temperature=True)
+        climates = self._usable(self._states(CONF_CLIMATE))
+        climate_valid = bool(climates)
+        unit_temps = [t for s in climates if (t := self._celsius_attr(s, "current_temperature", system_unit)) is not None]
+        unit_indoor = sum(unit_temps) / len(unit_temps) if unit_temps else None
+        if indoor is None:
+            indoor = unit_indoor
+
+        # How far the unit's own sensor sits from the room sensor. This matters more than
+        # it looks: the engine decides against YOUR sensor, but once a setpoint is sent the
+        # unit regulates against ITS OWN -- usually at the intake, near the ceiling, where
+        # air is warmest. So the room settles roughly `offset` colder than the number asked
+        # for. It is not compensated automatically, because the gap moves with airflow and
+        # stratification and guessing at it could overshoot the other way; it is reported so
+        # the discrepancy is visible instead of silently costing a couple of degrees.
+        sensor_offset = None
+        if indoor is not None and unit_indoor is not None and self._mean(CONF_TEMPERATURE, temperature=True) is not None:
+            sensor_offset = round(unit_indoor - indoor, 1)
+
+        # combined climate capability: only command what EVERY unit supports
+        if climates:
+            mode_sets = [set(self._attr(s, "hvac_modes", []) or []) for s in climates]
+            hvac_modes = sorted(set.intersection(*mode_sets)) if mode_sets else []
+            mins = [m for s in climates if (m := self._celsius_attr(s, "min_temp", system_unit)) is not None]
+            maxs = [m for s in climates if (m := self._celsius_attr(s, "max_temp", system_unit)) is not None]
+            min_temp = max(mins) if mins else None   # highest floor is safe for all
+            max_temp = min(maxs) if maxs else None    # lowest ceiling is safe for all
+            hvac_mode = next((s.state for s in climates if s.state in _MANAGED), climates[0].state)
+        else:
+            hvac_modes = []
+            min_temp = max_temp = None
+            hvac_mode = "off"
+
+        covers = self._usable(self._states(CONF_BLINDS))
+        humidifiers = self._usable(self._states(CONF_HUMIDIFIER))
+        first_h = humidifiers[0] if humidifiers else None
+        weathers = self._usable(self._states(CONF_WEATHER))
+        outdoors = [o for s in weathers if (o := self._celsius_attr(s, "temperature", self._attr(s, "temperature_unit") or system_unit)) is not None]
+        aqi_value, aqi_dominant = self._aqi()
+        lh, lc, ls = self._lightning()
+        sun = self.hass.states.get("sun.sun")
+        invalid = [reason for key in ENTITY_KEYS for reason in self._invalid(key)]
+        invalid += self._actuator_conflicts()
+        return Snapshot(
+            indoor_temp=indoor if indoor is not None else 0.0,
+            humidity=(humidity := self._mean(CONF_HUMIDITY)),
+            feels_like=_feels_like(indoor, humidity, self.options.humidity_cooling),
+            outdoor_temp=sum(outdoors) / len(outdoors) if outdoors else None,
+            occupancy=self._occupied_held(),
+            window_open=self._any_on(CONF_WINDOW),
+            portable_ac=self.options.portable_ac,
+            # The exhaust hose is vented only via its OWN vent sensor or the manual switch --
+            # a generic door/window contact must never imply the hose is vented.
+            vented=self._any_on(CONF_VENT) or self.vent_override,
+            vent_required=bool(self.options.portable_ac) or bool(as_list(self.config.get(CONF_VENT))),
+            fan_available=not self._invalid(CONF_FAN),
+            quiet=self.options.quiet_hours and in_quiet_hours(dt_util.now().time(), self.options.quiet_start, self.options.quiet_end),
+            energy_price=self._mean(CONF_PRICE),
+            price_average=self._mean(CONF_PRICE_AVERAGE),
+            price_rank=(price_signals := self._price_signals())[0],
+            price_precool=price_signals[1],
+            co2=self._max(CONF_CO2),
+            voc=self._max(CONF_VOC),
+            lux=self._max(CONF_LUX),
+            humidifier_class=self._attr(first_h, "device_class"),
+            aqi=aqi_value,
+            aqi_dominant_factor=aqi_dominant,
+            outdoor_aqi=self._max(CONF_OUTDOOR_AQI),
+            outdoor_aqi_soon=self._outdoor_aqi_soon(),
+            outdoor_pollen=self._worst_now(CONF_OUTDOOR_POLLEN),
+            outdoor_pollen_soon=self._forecast_peak(CONF_OUTDOOR_POLLEN),
+            outdoor_gas=self._worst_now(CONF_OUTDOOR_GAS),
+            pm25=self._max(CONF_PM25),
+            pm10=self._max(CONF_PM10),
+            dark=(lux := self._max(CONF_LUX)) is not None and self.options.sleep_lux > 0 and lux <= self.options.sleep_lux,
+            forecast_high=self._forecast_high(system_unit),
+            precool_opportunity=self._precool_opportunity(system_unit),
+            quiet_precool=self._quiet_precool(indoor, sum(outdoors) / len(outdoors) if outdoors else None),
+            rewarm_rate=self._rewarm_rate(indoor, sum(outdoors) / len(outdoors) if outdoors else None, self._max(CONF_LUX),
+                                          sun is not None and sun.state == "above_horizon", self._attr(sun, "elevation"),
+                                          self._occupied(CONF_OCCUPANCY)),
+            setpoint_compensation=self.thermal.setpoint_compensation,
+            forecast_pressure=self._forecast_pressure(system_unit),
+            hvac_mode=hvac_mode,
+            hvac_modes=hvac_modes,
+            min_temp=min_temp,
+            max_temp=max_temp,
+            temperature_unit=system_unit,
+            sun_up=sun is not None and sun.state == "above_horizon",
+            sun_elevation=self._attr(sun, "elevation"),
+            smoke_detected=self._any_triggered(CONF_SMOKE),
+            lightning_hold=lh,
+            lightning_closest=lc,
+            lightning_strikes=ls,
+            lightning_band=lightning_band(lc) if lh else "clear",
+            outlet_overloaded=self._any_triggered(CONF_OUTLET_OVERLOAD),
+            temperature_valid=indoor is not None,
+            unit_temperature=unit_indoor,
+            sensor_offset=sensor_offset,
+            climate_valid=climate_valid,
+            compressor_running=self._compressor_running(climates),
+            purifier_level=self._purifier_level(),
+            cover_closed=bool(covers) and all(s.state == "closed" for s in covers),
+            invalid_entities=invalid,
+        )

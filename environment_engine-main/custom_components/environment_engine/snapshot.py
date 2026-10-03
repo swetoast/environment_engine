@@ -1,0 +1,60 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+@dataclass(slots=True)
+class Snapshot:
+    indoor_temp: float
+    humidity: float | None
+    outdoor_temp: float | None
+    occupancy: bool
+    window_open: bool
+    energy_price: float | None
+    co2: float | None
+    voc: float | None
+    hvac_mode: str
+    hvac_modes: list[str] = field(default_factory=list)
+    min_temp: float | None = None
+    max_temp: float | None = None
+    temperature_unit: str = "°C"
+    sun_up: bool = False
+    sun_elevation: float | None = None
+    smoke_detected: bool = False
+    outlet_overloaded: bool = False
+    temperature_valid: bool = True
+    climate_valid: bool = True
+    feels_like: float | None = None
+    portable_ac: bool = False
+    vented: bool = False
+    quiet: bool = False
+    fan_available: bool = True
+    unit_temperature: float | None = None    # what the AC's own sensor reads
+    sensor_offset: float | None = None       # unit sensor minus room sensor
+    outdoor_aqi_soon: float | None = None    # worst outdoor AQI in the next few hours
+    outdoor_pollen: float | None = None      # worst current pollen, grains/m3 (filterable)
+    outdoor_pollen_soon: float | None = None # worst pollen in the next few hours
+    outdoor_gas: float | None = None         # worst current outdoor gas level, 0..1 (not filterable)
+    compressor_running: bool = False          # a unit is actually cooling or drying right now
+    purifier_level: float = 0.0               # the purifier's real airflow, 0..1
+    vent_required: bool = False               # exhaust must be confirmed vented before cool/dry
+    cover_closed: bool = False
+    lux: float | None = None
+    humidifier_class: str | None = None
+    aqi: float | None = None
+    aqi_dominant_factor: str | None = None
+    outdoor_aqi: float | None = None
+    lightning_hold: bool = False
+    lightning_closest: float | None = None
+    lightning_strikes: int = 0
+    lightning_band: str = "clear"
+    pm25: float | None = None
+    pm10: float | None = None
+    dark: bool = False
+    forecast_high: float | None = None
+    quiet_precool: float = 0.0         # 0..1 learned: the night ahead is predicted too warm for quiet hours
+    rewarm_rate: float = 0.0           # learned: degrees C per minute this room regains with the AC off
+    setpoint_compensation: int = 0     # learned: whole degrees to take off the SENT setpoint (unit sensor reads cold)
+    precool_opportunity: float = 0.0   # 0..1 forecast-coupled: heat coming later, cheaper now
+    forecast_pressure: float = 0.0
+    price_average: float | None = None
+    price_rank: float | None = None
+    price_precool: bool = False
+    invalid_entities: list[str] = field(default_factory=list)

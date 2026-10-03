@@ -1,0 +1,54 @@
+from __future__ import annotations
+from ..confidence import speed_tier
+from ..const import ACTION_NONE, ACTION_OFF, ACTION_ON, IONIZER_NEVER, IONIZER_WITH_PURIFIER, PURIFIER_RELEASE, STRATEGY_AIR_QUALITY
+
+_IONIZER_SURGE = 0.6  # 'surge' mode: air-quality pressure above this engages the ionizer
+
+
+def resolve_purifier(snapshot, capabilities, options, ev, sleep=False):
+    """Decide purifier run state, speed, and ionizer together. Returns
+    (action, speed|None, ionizer_action, driver|None).
+
+    Run/off comes from the air-quality signal (AQI sensor when present, else
+    CO2/VOC). Speed scales with the pressure magnitude. The ionizer follows the
+    user's chosen mode: with the purifier (default), only on a strong pollution
+    surge, or never. At night the speed is capped for quiet, unless an outdoor
+    air-quality event demands full power.
+    """
+    if not capabilities.purifier or not capabilities.air_quality:
+        return ACTION_NONE, None, ACTION_NONE, None
+    aq = ev["air_quality"]
+    ionizer_idle = ACTION_OFF if capabilities.ionizer else ACTION_NONE
+    # A seal event means outdoor air is bad and ventilation has been shut. Whatever leaks in
+    # anyway needs scrubbing, so the purifier runs hard even if the indoor reading is still
+    # clean -- otherwise "seal and purify" seals but never purifies, and infiltrating smoke
+    # just accumulates behind closed vents.
+    # Boost hard only when the purifier can actually help -- a filterable (PM/pollen) seal,
+    # or an ordinary indoor recommendation. During a GAS-only seal the room is shut to keep
+    # the gas out, but a HEPA filter can't remove it, so don't ramp the purifier as if it
+    # could; run it at whatever the indoor air itself warrants.
+    filterable_seal = aq.seal and aq.seal_threat != "gas"
+    if filterable_seal or aq.purifier_recommended:
+        pressure = max(aq.pressure, 0.66) if filterable_seal else aq.pressure
+        speed = speed_tier(pressure, 0.66, 0.33)
+        if sleep and not aq.seal and speed == "high":
+            speed = "medium"  # keep it quieter overnight
+        ionizer = ionizer_idle
+        if capabilities.ionizer and options.ionizer_mode != IONIZER_NEVER:
+            wants_ionizer = (options.ionizer_mode == IONIZER_WITH_PURIFIER
+                             or filterable_seal or aq.pressure >= _IONIZER_SURGE)
+            # An ionizer produces ozone, which is itself a lung irritant. Only run it in an
+            # EMPTY room: it should scrub the air while nobody is breathing it, and stand
+            # down (leaving the plain purifier running) the moment someone is present. When
+            # occupancy is unknown, err toward the person and leave it off.
+            room_empty = snapshot.occupancy is False
+            if wants_ionizer and room_empty:
+                ionizer = ACTION_ON
+        return ACTION_ON, speed, ionizer, STRATEGY_AIR_QUALITY
+    if aq.pressure < PURIFIER_RELEASE:
+        return ACTION_OFF, None, ionizer_idle, None
+    # Dead band: the purifier keeps whatever it was doing. The ionizer does not get the
+    # same benefit of the doubt. It may only stay on in a room known to be empty, so the
+    # moment someone walks in (or presence becomes unknown) it is switched off here too,
+    # instead of riding the dead band with a person breathing next to it.
+    return ACTION_NONE, None, (ACTION_NONE if snapshot.occupancy is False else ionizer_idle), None
