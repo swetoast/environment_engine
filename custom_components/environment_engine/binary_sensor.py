@@ -44,7 +44,6 @@ class EnvironmentFilterDueSensor(EnvironmentEngineEntity, BinarySensorEntity):
         health = self.coordinator.air.filter_health
         if health is not None and health < 0.5:
             return True  # measured: it has lost half its cleaning power, whatever the clock says
-        life = self.coordinator.options.filter_life
         return life > 0 and self.coordinator.data["runtime"]["purifier"] >= life
 
     @property

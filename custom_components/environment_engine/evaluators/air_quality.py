@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from dataclasses import replace
 from ..confidence import clamp
+from ..const import PURIFIER_RELEASE
 @dataclass(slots=True)
 class AirQualityResult:
     pressure: float
@@ -106,3 +108,19 @@ def evaluate_air_quality(snapshot, options) -> AirQualityResult:
         reason = f"indoor particle event ({pm_dominant}) — purifying and airing out"
 
     return AirQualityResult(pressure, recommended, reason, dominant, seal, indoor_event, seal_threat)
+
+
+def hold_after_event(result: AirQualityResult, memory, now: float, half_life_s: float) -> AirQualityResult:
+    """Keep purifying through the tail of an event, and nothing else.
+
+    `memory` is a PeakDecay. It is fed the pressure of RECOMMENDED events only, and the
+    hold ends once that has decayed to the purifier's release level. The earlier version
+    held any reading that was merely lower than the one before it, so ordinary sensor noise
+    in clean air (0.08 -> 0.05) counted as "the tail of an event" and switched the purifier
+    on, and a gas-only seal (which a filter cannot help) left it running afterwards.
+    """
+    held = memory.update(result.pressure if result.purifier_recommended else 0.0, now, half_life_s)
+    if result.purifier_recommended or held < PURIFIER_RELEASE or held <= result.pressure:
+        return result
+    return replace(result, pressure=held, purifier_recommended=True,
+                   reason="clearing the air after a particle event")

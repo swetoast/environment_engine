@@ -32,6 +32,8 @@ class Snapshot:
     outdoor_pollen: float | None = None      # worst current pollen, grains/m3 (filterable)
     outdoor_pollen_soon: float | None = None # worst pollen in the next few hours
     outdoor_gas: float | None = None         # worst current outdoor gas level, 0..1 (not filterable)
+    compressor_running: bool = False          # a unit is actually cooling or drying right now
+    purifier_level: float = 0.0               # the purifier's real airflow, 0..1
     vent_required: bool = False               # exhaust must be confirmed vented before cool/dry
     cover_closed: bool = False
     lux: float | None = None

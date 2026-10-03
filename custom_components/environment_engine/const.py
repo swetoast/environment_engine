@@ -169,3 +169,8 @@ ROOM_ENTITY_KEYS = (
 )
 # Everything, for the coordinator's availability scan.
 ENTITY_KEYS = GLOBAL_ENTITY_KEYS + ROOM_ENTITY_KEYS
+
+# Air-quality pressure below which the purifier is released (switched off), and below
+# which a decaying after-event hold stops keeping it on. One number, used by both the
+# purifier resolver and the coordinator's hold, so the two can never disagree.
+PURIFIER_RELEASE = 0.15

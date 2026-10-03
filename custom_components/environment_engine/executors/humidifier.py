@@ -3,7 +3,7 @@ import logging
 from homeassistant.const import ATTR_ENTITY_ID
 from ..const import ACTION_OFF, ACTION_ON, CONF_HUMIDIFIER
 from ..entities import as_list
-from .common import controllable, is_assumed
+from .common import controllable, is_assumed, skipped
 _LOGGER = logging.getLogger(__name__)
 async def apply_humidifier(hass, config: dict, snapshot, decision) -> bool:
     if decision.humidifier_action not in (ACTION_ON, ACTION_OFF):
@@ -15,7 +15,7 @@ async def apply_humidifier(hass, config: dict, snapshot, decision) -> bool:
 async def _apply_one(hass, entity_id, decision) -> bool:
     state = controllable(hass, entity_id)
     if state is None:
-        return True
+        return skipped(hass, entity_id)
     assumed = is_assumed(state)
     try:
         if decision.humidifier_action == ACTION_OFF:

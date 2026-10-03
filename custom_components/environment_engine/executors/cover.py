@@ -4,7 +4,7 @@ from homeassistant.const import ATTR_ENTITY_ID
 from ..const import ACTION_CLOSE, ACTION_OPEN, CONF_BLINDS
 from ..entities import as_list
 from ..features import cover_features
-from .common import controllable, is_assumed
+from .common import controllable, is_assumed, skipped
 _LOGGER = logging.getLogger(__name__)
 async def apply_cover(hass, config: dict, snapshot, decision) -> bool:
     if decision.cover_action not in (ACTION_CLOSE, ACTION_OPEN):
@@ -16,7 +16,7 @@ async def apply_cover(hass, config: dict, snapshot, decision) -> bool:
 async def _apply_one(hass, entity_id, decision) -> bool:
     state = controllable(hass, entity_id, ("unavailable", "unknown", "opening", "closing"))
     if state is None:
-        return True
+        return skipped(hass, entity_id)
     assumed = is_assumed(state)
     opening = decision.cover_action == ACTION_OPEN
     if not assumed:

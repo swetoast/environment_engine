@@ -1,6 +1,6 @@
 from __future__ import annotations
 from ..confidence import speed_tier
-from ..const import ACTION_NONE, ACTION_OFF, ACTION_ON, IONIZER_NEVER, IONIZER_WITH_PURIFIER, STRATEGY_AIR_QUALITY
+from ..const import ACTION_NONE, ACTION_OFF, ACTION_ON, IONIZER_NEVER, IONIZER_WITH_PURIFIER, PURIFIER_RELEASE, STRATEGY_AIR_QUALITY
 
 _IONIZER_SURGE = 0.6  # 'surge' mode: air-quality pressure above this engages the ionizer
 
@@ -45,6 +45,10 @@ def resolve_purifier(snapshot, capabilities, options, ev, sleep=False):
             if wants_ionizer and room_empty:
                 ionizer = ACTION_ON
         return ACTION_ON, speed, ionizer, STRATEGY_AIR_QUALITY
-    if aq.pressure < 0.15:
+    if aq.pressure < PURIFIER_RELEASE:
         return ACTION_OFF, None, ionizer_idle, None
-    return ACTION_NONE, None, ACTION_NONE, None
+    # Dead band: the purifier keeps whatever it was doing. The ionizer does not get the
+    # same benefit of the doubt. It may only stay on in a room known to be empty, so the
+    # moment someone walks in (or presence becomes unknown) it is switched off here too,
+    # instead of riding the dead band with a person breathing next to it.
+    return ACTION_NONE, None, (ACTION_NONE if snapshot.occupancy is False else ionizer_idle), None

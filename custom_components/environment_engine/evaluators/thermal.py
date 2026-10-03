@@ -22,9 +22,15 @@ def evaluate_thermal(snapshot, memory, solar_pressure: float, energy_penalty: fl
     # much as when it was tuned.
     lead = anticipation if excess > 0.0 else 0.0
     base = clamp((excess + lead) / 3.0)
-    bonuses = [solar_pressure * 0.25, memory.thermal_inertia * 0.1, learning_bias]
-    if memory.temperature_trend > WARMING_TREND_C_PER_MIN:
-        bonuses.append(0.1)
+    # The same guard applies to every bonus. Sun, inertia, a warming trend and the learned
+    # bias all say "this will get worse", which only means something for a room that is
+    # already above the setpoint. Added to a room below it they summed past the fan's
+    # threshold on their own, so a 19 C room in winter sunshine got a fan.
+    bonuses = []
+    if excess > 0.0:
+        bonuses = [solar_pressure * 0.25, memory.thermal_inertia * 0.1, learning_bias]
+        if memory.temperature_trend > WARMING_TREND_C_PER_MIN:
+            bonuses.append(0.1)
     # Price influences how HARD the engine cools (via the setpoint), never WHETHER it
     # cools. Subtracting it here meant an expensive evening pushed the cool-start point
     # from 25 C out to 28 C -- the room got hot to save money nobody agreed to spend.

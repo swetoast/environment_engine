@@ -67,15 +67,17 @@ class Planner:
         hvac = HVAC_OFF if managed else None
         fan = ACTION_OFF if self.capabilities.fan else ACTION_NONE
         vent = ACTION_OFF if self.capabilities.ventilation else ACTION_NONE
-        # An empty house still deserves protection during an outdoor air-quality event: seal
-        # the ventilation and keep the purifier running so infiltrating smoke doesn't just
-        # settle into the home. Everything else stays idle to save energy while away.
+        # Air quality does not depend on anyone being home. The purifier is resolved exactly
+        # as it is in an occupied room: it runs while the air needs it and is switched off
+        # once it is clean. Before, the away path only touched it during an outdoor seal, so
+        # a purifier that happened to be on when you left kept running all day, and the
+        # ionizer (which is only ever allowed in an EMPTY room) almost never got to run.
+        purifier, speed, ionizer, purifier_driver = resolve_purifier(snapshot, self.capabilities, self.options, evaluations, sleep=False)
+        air = dict(purifier_speed=speed, ionizer_action=ionizer, ventilation_action=vent)
         aq = evaluations["air_quality"]
-        if aq.seal and self.capabilities.purifier and self.capabilities.air_quality:
-            purifier, speed, ionizer, _ = resolve_purifier(snapshot, self.capabilities, self.options, evaluations, sleep=False)
-            return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, ACTION_NONE, purifier, 1.0,
-                            "sealing against outdoor air while away", purifier_speed=speed,
-                            ionizer_action=ionizer, ventilation_action=vent)
+        if aq.seal and purifier_driver:
+            return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, cover_action, purifier, 1.0,
+                            "sealing against outdoor air while away", **air)
         # An empty flat is allowed to drift, but not without limit. Letting it bake to
         # 31 C means you walk into a hot room and the unit then has to claw all of it
         # back at once -- which costs more than never letting it get there. Cap the
@@ -83,24 +85,27 @@ class Planner:
         target = evaluations["target"].base_target if "target" in evaluations else int(self.options.target)
         ceiling = target + self.options.away_max_drift
         indoor = snapshot.indoor_temp
+        vent_required = self.options.portable_ac or self.capabilities.vent_sensor
+        vented_ok = not vent_required or snapshot.vented
         if (self.capabilities.climate and snapshot.climate_valid and snapshot.temperature_valid
                 and indoor is not None and self.options.away_max_drift > 0 and indoor > ceiling
-                and HVAC_COOL in snapshot.hvac_modes
-                and (not self.options.portable_ac or snapshot.vented)):
+                and HVAC_COOL in snapshot.hvac_modes and vented_ok):
             return Decision(STRATEGY_COOLING, HVAC_COOL, ceiling, fan, None, cover_action,
-                            ACTION_NONE, 1.0, "capping the heat in an empty home",
-                            ventilation_action=vent)
+                            purifier, 1.0, "capping the heat in an empty home", **air)
 
         # Damp air does not care whether anyone is in. Mould grows regardless, so a wet
         # empty flat still gets dried -- the same reasoning as sealing against smoke above.
+        # DRY runs the compressor, so it obeys the same vent gate as cooling.
         if (self.capabilities.climate and self.capabilities.humidity and not self.capabilities.humidifier
-                and snapshot.climate_valid and HVAC_DRY in snapshot.hvac_modes
+                and snapshot.climate_valid and HVAC_DRY in snapshot.hvac_modes and vented_ok
                 and should_dehumidify(snapshot, self.options, True)):
             return Decision(STRATEGY_DEHUMIDIFY, HVAC_DRY, None, fan, None, cover_action,
-                            ACTION_NONE, 1.0, "drying an empty home to keep mould down",
-                            ventilation_action=vent)
+                            purifier, 1.0, "drying an empty home to keep mould down", **air)
 
-        return Decision(STRATEGY_AWAY_IDLE, hvac, None, fan, None, cover_action, ACTION_NONE, 1.0, "home is unoccupied", ventilation_action=vent)
+        if purifier_driver:
+            return Decision(STRATEGY_AIR_QUALITY, hvac, None, fan, None, cover_action, purifier,
+                            round(float(aq.pressure), 4), "cleaning the air in an empty home", **air)
+        return Decision(STRATEGY_AWAY_IDLE, hvac, None, fan, None, cover_action, purifier, 1.0, "home is unoccupied", **air)
 
     def _label(self, drivers, snapshot) -> str:
         for driver in _LABEL_PRIORITY:

@@ -35,6 +35,15 @@ def controllable(hass, entity_id, skip=_SKIP):
     return state
 
 
+def skipped(hass, entity_id) -> bool:
+    """What an executor returns for an entity `controllable` rejected. True (done, cache
+    it) when the entity does not exist at all, since there will never be anything to send.
+    False (retry next cycle) when it exists but is unavailable, unknown or mid-movement:
+    the command still needs delivering once the device is back. Returning True for both
+    meant a device that was offline when a decision was made never received it."""
+    return not entity_id or hass.states.get(entity_id) is None
+
+
 def is_assumed(state) -> bool:
     # Assumed-state (e.g. IR) devices don't report back, so we never trust their
     # perceived state to skip a command.

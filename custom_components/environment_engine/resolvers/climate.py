@@ -27,7 +27,7 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
         3. above setpoint, cooling available -> COOL
            above setpoint, cooling blocked   -> FAN_ONLY, keep air moving while blocked
         4. at setpoint but air too wet       -> DRY
-        5. circulation wanted                -> FAN_ONLY
+        5. mould airflow wanted              -> FAN_ONLY
         6. otherwise                         -> OFF
     """
     if not capabilities.climate or not snapshot.climate_valid:
@@ -108,11 +108,7 @@ def resolve_climate(snapshot, capabilities, options, ev, passive_cooling):
         if not already_drying and should_dehumidify(snapshot, options, True):
             return HVAC_DRY, None, STRATEGY_DEHUMIDIFY
 
-    # --- 5. Circulation ---
-    # Passive ventilation is a *cooling* strategy, so it lives inside the above-target
-    # branch above. A room that is already cool does not need the window's help.
-    if ac_fan_ok and options.fan_comfort and above_target:
-        return HVAC_FAN_ONLY, None, STRATEGY_AIR_CIRCULATION
+    # --- 5. Circulation against mould ---
     if mold.airflow_recommended and ac_fan_ok:
         return HVAC_FAN_ONLY, None, STRATEGY_MOLD_PREVENTION
 

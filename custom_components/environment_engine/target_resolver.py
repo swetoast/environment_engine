@@ -1,18 +1,18 @@
 """Effective climate target resolver.
 
-One comfort baseline; the engine derives comfort/eco/sleep and pre-cooling itself
-by moving the setpoint within safe bounds from live conditions:
+Your setpoint is the ceiling. Live conditions may push the driven setpoint BELOW it, in
+whole degrees, and may ease that push back off again. Nothing raises it above your number.
 
   reactive drop   -> hot room now / warming trend       (cool harder)
   outdoor drop    -> hot outside                          (preemptive, small)
-  precool drop    -> hot period forecast AND power cheap  (bank coolth early)
-  night relax     -> sun down                             (quieter, sleep-like)
-  energy relax    -> expensive power now                  (eco)
-  ventilation     -> open window, cooler outside          (let it work)
+  precool drop    -> hot period forecast AND power cheap  (bank cooling early)
+  damp drop       -> dew point above your sensitivity     (cool harder)
+  night relax     -> sun down                             (cancel some of the drop)
+  energy relax    -> expensive power now                  (cancel some of the drop)
+  ventilation     -> open window, cooler outside          (cancel some of the drop)
 
-'Away' is handled by the planner idling an empty room. Solar stays a thermal-
-confidence bonus (whether to run) and energy stays both a confidence penalty and
-the relax term here (how hard), each capped so they don't compound past bounds.
+'Away' is handled by the planner. Price never decides WHETHER the engine cools, only how
+far below your number it is willing to drive.
 """
 from __future__ import annotations
 import math
@@ -121,7 +121,11 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
         factors.append("ventilation")
     relaxation = min(round(relax), _MAX_RELAX)
 
-    raw = _clamp(base - total_drop + relaxation, base - _MAX_CORRECTION, base + _MAX_CORRECTION)
+    # Relaxation eases the EXTRA cooling back toward your number. It can cancel a drop; it
+    # cannot lift the setpoint above what you asked for. Night, price and an open window
+    # used to be able to send base + 2, so a 22 C setpoint became 24 C after sunset and the
+    # unit sat idle in a room the resolver had already called too warm.
+    raw = _clamp(base - total_drop + relaxation, base - _MAX_CORRECTION, base)
 
     # Condensation guard: never target below the room's dew point + margin, or the
     # AC would drive surfaces toward condensation. A humid (high dew point) room is
@@ -155,8 +159,8 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
             reason = "pre-cooling ahead of forecast heat while power is cheap"
         else:
             reason = "lowered setpoint for heat load"
-    elif effective > int(base):
-        reason = "relaxed setpoint for " + ", ".join(factors) if factors else "relaxed setpoint"
+    elif total_drop > 0 and relaxation > 0 and factors:
+        reason = "holding baseline setpoint (extra cooling eased for " + ", ".join(factors) + ")"
     else:
         reason = "holding baseline setpoint"
     if dew_limited:
@@ -167,7 +171,7 @@ def resolve_effective_target(snapshot, memory, evaluations, options) -> TargetRe
         effective_target=effective,
         reason=reason,
         cooling_drop=int(total_drop),
-        relaxation=int(relaxation),
+        relaxation=int(min(relaxation, total_drop)),
         precool=int(precool_drop),
         limited_by_min=clamped <= low,
         limited_by_max=clamped >= high,

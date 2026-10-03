@@ -5,7 +5,7 @@ from ..const import ACTION_OFF, ACTION_ON, CONF_PURIFIER
 from ..entities import as_list
 from ..features import fan_features
 from ..presets import preset_for_speed
-from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed, snap_percentage
+from .common import SPEED_TO_PERCENTAGE, controllable, is_assumed, snap_percentage, skipped
 _LOGGER = logging.getLogger(__name__)
 async def apply_purifier(hass, config: dict, decision) -> bool:
     if decision.purifier_action not in (ACTION_ON, ACTION_OFF):
@@ -17,7 +17,7 @@ async def apply_purifier(hass, config: dict, decision) -> bool:
 async def _apply_one(hass, entity_id, decision) -> bool:
     state = controllable(hass, entity_id)
     if state is None:
-        return True
+        return skipped(hass, entity_id)
     domain = entity_id.split(".", 1)[0]
     assumed = is_assumed(state)
     features = fan_features(state) if domain == "fan" else None

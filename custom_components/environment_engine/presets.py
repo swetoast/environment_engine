@@ -15,6 +15,19 @@ _SYNONYMS = {
 }
 
 
+_FRACTION = {"low": 0.33, "medium": 0.66, "high": 1.0}
+
+
+def preset_fraction(preset) -> float:
+    """Airflow (0..1) a running purifier's preset stands for; a middle value when the
+    preset is unknown or absent (Auto, or a plain on/off unit)."""
+    name = str(preset).strip().lower() if preset else ""
+    for tier, names in _SYNONYMS.items():
+        if name in names:
+            return _FRACTION[tier]
+    return 0.66
+
+
 def preset_for_speed(available, speed: str | None) -> str | None:
     """The device's own preset name for our speed tier, or None if it has no match."""
     if not available or not speed:

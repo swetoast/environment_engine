@@ -1,5 +1,5 @@
 from __future__ import annotations
-from .air_quality import AirQualityResult, evaluate_air_quality
+from .air_quality import AirQualityResult, evaluate_air_quality, hold_after_event
 from .energy import EnergyResult, evaluate_energy
 from .humidity import HumidityResult, evaluate_humidity
 from .mold import MoldResult, evaluate_mold
@@ -12,4 +12,4 @@ def drying_pressure(ev) -> float:
     """Combined humidity + mold pressure that drives dry mode / a dehumidifier."""
     return max(ev["humidity"].confidence, ev["mold"].risk)
 
-__all__ = ["AirQualityResult", "EnergyResult", "HumidityResult", "MoldResult", "SafetyResult", "SolarResult", "ThermalResult", "evaluate_air_quality", "evaluate_energy", "evaluate_humidity", "evaluate_mold", "evaluate_safety", "evaluate_solar", "evaluate_thermal", "drying_pressure"]
+__all__ = ["AirQualityResult", "EnergyResult", "HumidityResult", "MoldResult", "SafetyResult", "SolarResult", "ThermalResult", "evaluate_air_quality", "hold_after_event", "evaluate_energy", "evaluate_humidity", "evaluate_mold", "evaluate_safety", "evaluate_solar", "evaluate_thermal", "drying_pressure"]

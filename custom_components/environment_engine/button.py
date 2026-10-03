@@ -16,7 +16,9 @@ class ApplyDecisionButton(EnvironmentEngineEntity, ButtonEntity):
     def available(self) -> bool:
         return super().available and self.coordinator.data is not None and not self.coordinator.data["decision"].blocked
     async def async_press(self) -> None:
-        await self.coordinator.async_apply_decision()
+        # A press means "send it now", even if nothing in the decision changed since the
+        # last send (a device switched by hand, say). Bypass the per-channel memory.
+        await self.coordinator.async_apply_decision(force=True)
 class RefreshDecisionButton(EnvironmentEngineEntity, ButtonEntity):
     _attr_name = "Refresh Decision"
     _attr_icon = "mdi:refresh"

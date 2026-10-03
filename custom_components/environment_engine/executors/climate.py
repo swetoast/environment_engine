@@ -5,7 +5,7 @@ from ..const import CONF_CLIMATE, HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY, HVAC_OFF
 from ..entities import as_list
 from ..features import climate_features
 from ..units import from_celsius
-from .common import controllable, is_assumed
+from .common import controllable, is_assumed, skipped
 _LOGGER = logging.getLogger(__name__)
 # Modes the engine manages; it only stands these down, never a mode it does not drive.
 _MANAGED = {HVAC_COOL, HVAC_DRY, HVAC_FAN_ONLY}
@@ -19,7 +19,7 @@ async def apply_climate(hass, config: dict, snapshot, decision) -> bool:
 async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
     state = controllable(hass, entity_id)
     if state is None:
-        return True
+        return skipped(hass, entity_id)
     assumed = is_assumed(state)
     modes = state.attributes.get("hvac_modes", []) or []
     feats = climate_features(state)
@@ -29,14 +29,14 @@ async def _apply_one(hass, entity_id, snapshot, decision) -> bool:
     # them heats the room instead of cooling it. The resolver already gates this, but a
     # safety failure this direct deserves defence in depth: never *send* cool or dry to a
     # unit the snapshot says is unvented. Stand it down instead.
-    if (decision.hvac_mode in (HVAC_COOL, HVAC_DRY)
-            and getattr(snapshot, "vent_required", False)
-            and not snapshot.vented):
-        if state.state in _MANAGED and HVAC_OFF in modes:
-            await hass.services.async_call("climate", "set_hvac_mode",
-                {ATTR_ENTITY_ID: entity_id, "hvac_mode": HVAC_OFF}, blocking=True)
-        return True
     try:
+        if (decision.hvac_mode in (HVAC_COOL, HVAC_DRY)
+                and getattr(snapshot, "vent_required", False)
+                and not snapshot.vented):
+            if state.state in _MANAGED and HVAC_OFF in modes:
+                await hass.services.async_call("climate", "set_hvac_mode",
+                    {ATTR_ENTITY_ID: entity_id, "hvac_mode": HVAC_OFF}, blocking=True)
+            return True
         if decision.hvac_mode == HVAC_OFF:
             if state.state == HVAC_OFF and not assumed:
                 return True

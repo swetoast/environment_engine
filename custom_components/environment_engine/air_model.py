@@ -31,18 +31,8 @@ _DEP_RANGE = (0.0, 0.5)
 _INF_RANGE = (0.0, 0.5)
 _GEN_RANGE = (0.0, 20.0)   # ug/m3 per minute
 
-_SPEED_FRACTION = {None: 0.0, "off": 0.0, "low": 0.33, "medium": 0.66, "high": 1.0}
-
-
 def _clamp(value, low, high):
     return max(low, min(value, high))
-
-
-def speed_fraction(action, speed) -> float:
-    """The purifier's airflow as a 0..1 fraction, from the engine's own action/speed."""
-    if action in (None, "off", "none"):
-        return 0.0
-    return _SPEED_FRACTION.get(speed, 0.66)
 
 
 class AirModel:

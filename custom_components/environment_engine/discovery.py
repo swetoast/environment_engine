@@ -22,7 +22,10 @@ def match_slots(candidates) -> dict:
     items = list(candidates)
 
     def pick_all(pred):
-        return [entity_id for entity_id, domain, device_class, unit, name in items if pred(domain, device_class, unit, entity_id)]
+        # Predicates match on the entity id AND the friendly name: `fan.xiaomi_cpa4` says
+        # nothing, "Bedroom Air Purifier" does.
+        return [entity_id for entity_id, domain, device_class, unit, name in items
+                if pred(domain, device_class, unit, f"{entity_id} {name or ''}".lower())]
 
     suggestions: dict[str, list[str]] = {}
 
@@ -45,10 +48,13 @@ def match_slots(candidates) -> dict:
     setif(CONF_OCCUPANCY, lambda d, dc, u, e: d == "binary_sensor" and dc in ("occupancy", "presence", "motion"))
     setif(CONF_SMOKE, lambda d, dc, u, e: d == "binary_sensor" and dc == "smoke")
     setif(CONF_BLINDS, lambda d, dc, u, e: d == "cover")
-    setif(CONF_PURIFIER, lambda d, dc, u, e: d in ("fan", "switch") and "purif" in e)
+    def is_purifier(e):
+        return any(word in e for word in ("purif", "air cleaner", "air_cleaner", "hepa"))
+
+    setif(CONF_PURIFIER, lambda d, dc, u, e: d in ("fan", "switch") and is_purifier(e) and "ioniz" not in e)
     setif(CONF_HUMIDIFIER, lambda d, dc, u, e: d == "humidifier")
     setif(CONF_IONIZER, lambda d, dc, u, e: d == "switch" and "ioniz" in e)
-    setif(CONF_FAN, lambda d, dc, u, e: d == "fan" and "purif" not in e)
+    setif(CONF_FAN, lambda d, dc, u, e: d == "fan" and not is_purifier(e))
     return suggestions
 
 
