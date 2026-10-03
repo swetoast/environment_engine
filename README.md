@@ -6,19 +6,22 @@ An autonomous climate, air-quality and humidity controller for Home Assistant.
 
 You point it at whatever sensors and devices a room already has. It decides when to cool, when a
 fan is enough, when to dehumidify, when to shut the blinds, when to seal the flat against outdoor
-smoke, when to run the purifier — and when to leave everything alone.
+smoke, when to run the purifier, and when to leave everything alone.
 
 **It never heats.** Cooling, air quality and humidity only, so it will not fight your radiators in
 winter.
 
 ## Highlights
 
-- **Your setpoint is the setpoint.** Above it, the engine cools. Only a safety hold overrides that
-  — not price, not the time of night, not a comfort model.
-- **Learns your room.** Fits the actual thermal physics online — envelope leakiness, solar gain, how
-  much your AC really removes, the heat you add by being home — and cools *ahead* of the heat.
+- **Your setpoint is the setpoint.** Above it, the engine cools. Only a safety hold overrides that:
+  not price, not the time of night, not a comfort model.
+- **Learns your room.** Fits the actual thermal physics online (envelope leakiness, solar gain, how
+  much your AC really removes, the heat you add by being home) and cools *ahead* of the heat.
 - **Electricity-aware.** Reads the spot-price forecast and banks cooling while power is cheap.
-  Never lets price stop it cooling.
+  Never lets price stop it cooling. Can optionally pre-cool ahead of a forecast hot afternoon
+  when power is cheaper now than it will be then.
+- **Knows what's in the outside air.** Seals against smoke, pollen or gas, and only runs the
+  purifier for the things a filter can actually catch (particulates), not gases it can't.
 - **Safety first.** Smoke, an overloaded outlet, or nearby lightning stop everything immediately.
 - **Works with what you have.** Every sensor and device slot is optional. A room with one fan and a
   thermometer still gets sensible behaviour.
@@ -45,12 +48,12 @@ winter.
 
 ## Configuration
 
-Everything is configured in the UI — **Settings → Devices & Services → Add Integration →
+Everything is configured in the UI: **Settings → Devices & Services → Add Integration →
 Environment Engine**. Nothing goes in `configuration.yaml`.
 
 There are two kinds of entry.
 
-### Global entry — add this once
+### Global entry (add this once)
 
 Shared outdoor data, so you set it once rather than repeating it per room. Every field is optional.
 
@@ -59,12 +62,14 @@ Shared outdoor data, so you set it once rather than repeating it per room. Every
 | Weather (outdoor) | Outdoor temperature and the forecast |
 | Forecast source | Forecast highs, for pre-cooling before a hot afternoon |
 | Outdoor air quality (AQI or PM) | Sealing the home during a smoke event |
+| Outdoor pollen (grains/m³) | Sealing + purifying during a pollen peak. Filterable, so the purifier helps |
+| Outdoor gas (ozone / CO / NO₂) | Sealing during a gas event. A filter can't scrub gases, so it seals only |
 | Energy price | Shifting cooling toward cheap power |
 | Average / reference price | Deciding what counts as expensive |
 | Price forecast | Finding the cheapest upcoming window |
 | Lightning sensor (Blitzortung) | Stopping everything during a storm |
 
-### Room entry — add one per room
+### Room entry (add one per room)
 
 Point it at what the room actually has. **Every slot is optional and every slot accepts multiple
 entities.**
@@ -79,7 +84,7 @@ entities.**
 Leave **Auto Apply** off at first. The engine will decide and report without touching anything,
 which is a good way to watch what it *would* do before letting it act.
 
-> After changing anything in the config flow, **fully restart Home Assistant** — a reload is not
+> After changing anything in the config flow, **fully restart Home Assistant**. A reload is not
 > enough, because Home Assistant caches integration translations.
 
 ## Options
@@ -95,7 +100,9 @@ Every option has inline help in the config flow. These are the ones that most ch
 | Let an empty home drift up to | 4 °C | How far above target an unoccupied room may get before the engine caps it, so you do not walk into a 31 °C flat. `0` lets it drift freely. |
 | Dry the coil after cooling | 120 s | Runs the fan briefly after a cycle to evaporate the wet coil. This is what stops an air conditioner smelling. `0` disables. |
 | Lightning reaction radius | 40 km | Any strike inside this stops the compressor. Closer and busier storms hold longer. |
-| Portable AC | Off | Gates cooling on a real vent signal — see below. |
+| Pollen threshold | 1.0 grains/m³ | Outdoor pollen level at which the home seals and the purifier runs. |
+| Pre-cool ahead of forecast heat | Off | Opt-in. Banks cooling before a hot afternoon when power is cheaper now than then. Only ever cools harder, never stops the engine cooling a hot room. |
+| Portable AC | Off | Gates cooling on a real vent signal. See below. |
 | Auto Apply | Off | Master switch: decide only, or actually act. |
 
 ## Entities
@@ -106,6 +113,7 @@ Each room entry creates:
 |---|---|---|
 | Decision | Sensor | What the engine is doing right now, per device, in plain language |
 | Cooling Demand | Sensor (%) | How strongly the room wants cooling, and the reasoning behind it |
+| Effectiveness | Sensor (%) | How well each system performs vs this room's own best: climate, air, humidity, whichever it has |
 | Air Conditioner Used Today | Sensor (h) | Daily runtime |
 | Air Purifier Used Today | Sensor (h) | Daily runtime; the lifetime total drives the filter reminder |
 | Struggling To Cool | Binary sensor | The AC is running but the room keeps gaining heat |
@@ -123,7 +131,7 @@ Each room entry creates:
 ## How it decides
 
 One rule matters more than the rest: **above your setpoint means cool.** Humidity and outdoor heat
-are context, and context may only ever make it cool *harder* — never less, and never "the room is
+are context, and context may only ever make it cool *harder*, never less, and never "the room is
 fine actually".
 
 ```
@@ -135,17 +143,45 @@ otherwise                                     →  off
 ```
 
 Setpoints are whole degrees, because that is what an air conditioner accepts, and they are rounded
-**down** — when the choice is between two integers, the colder one wins.
+**down**: when the choice is between two integers, the colder one wins.
 
 `fan only` is what the unit does when the compressor *cannot* or *need not* run: quiet hours, an
 unvented portable unit, the few minutes the compressor is protected after stopping, a standalone
 fan that has gone offline, free cooling through an open window, or drying the coil after a cycle.
-It is never chosen instead of cooling — a fan moves heat around, it does not remove any.
+It is never chosen instead of cooling. A fan moves heat around, it does not remove any.
+
+Night, expensive power and an open window can ease off *extra* cooling (the degrees the engine
+drives below your number on a hot day). They cannot lift the setpoint above your number.
+
+**The fan and the purifier are independent.** The fan runs for heat (circulation, a comfort breeze,
+pulling cooler air through an open window) and for damp (airflow against mould). The purifier runs
+for air quality and nothing else. A fan filters nothing, so bad air never starts it, and heat never
+starts the purifier. Each device is commanded on its own channel, so a change to one does not
+re-send the other.
+
+**An empty home.** Cooling stops, apart from capping the drift and drying a damp flat. Blinds keep
+shading. The purifier keeps following the air: it runs if the air needs it and switches off when it
+is clean.
 
 **Ozone-aware ionizer.** A purifier ionizer produces ozone, itself a lung irritant, so the engine
-only runs it in an **empty room** and stands it down the moment you're detected present — the plain
+only runs it in an **empty room** and stands it down the moment you're detected present. The plain
 purifier keeps running either way. With no occupancy sensor it assumes you're home and leaves the
 ionizer off.
+
+## Outdoor air: pollen, smoke and gas
+
+Sealing the home helps against some outdoor threats and not others, so the engine treats them
+differently instead of collapsing everything into one number:
+
+- **Particulates: smoke, PM, pollen.** A HEPA filter genuinely catches these, so the engine
+  seals *and* runs the purifier hard. Wire your pollen sensor (grains/m³) into the pollen slot and
+  hay-fever season is handled automatically.
+- **Gases: ozone, CO, NO₂, SO₂.** A filter can't scrub a gas, so the engine seals to keep it out
+  but does **not** ramp the purifier. Running it would just waste filter life pretending to help.
+
+Both the outdoor air-quality and pollen sensors carry a forecast, so the engine also **airs out
+pre-emptively**: if the room is getting stuffy and outdoor air is about to turn bad, it opens up now,
+while the outside is still clean, because once the threat arrives the window has to shut.
 
 ## Portable air conditioners
 
@@ -153,13 +189,13 @@ A portable unit dumps condenser heat down its exhaust hose, so running it unvent
 the room. Mark it **portable** and cooling is gated on a real vent signal: either a contact sensor
 on the window the hose goes through, or the **Exhaust Vented** switch.
 
-A general door or window sensor will **not** do — an open interior door does not vent the hose.
+A general door or window sensor will **not** do: an open interior door does not vent the hose.
 When it cannot cool, the unit falls back to fan-only to keep air moving. The manual switch
 auto-reverts after a few hours, and that deadline survives a restart, so a forgotten toggle cannot
 strand the unit into heating the room.
 
 **The vent gate applies whenever an exhaust vent contact is wired, even if you don't tick
-"Portable AC".** Cooling *and* drying are both blocked until venting is confirmed — the engine
+"Portable AC".** Cooling *and* drying are both blocked until venting is confirmed. The engine
 never runs the compressor into an unvented hose. If you have neither a portable unit nor a vent
 contact, there is no hose to vent and no gate.
 
@@ -171,8 +207,13 @@ can answer *"if I do nothing, what will this room read in half an hour?"* and st
 it needs to.
 
 It measures your purifier the same way, so the filter reminder is based on measured loss of
-cleaning power rather than an hours guess — and it will tell you when the AC is running but losing,
+cleaning power rather than an hours guess, and it will tell you when the AC is running but losing,
 which is usually a door left open, a dirty filter, or an undersized unit.
+
+The **Effectiveness** sensor turns this into one glanceable number per system, measured against
+what *this* room has proven it can do, not an assumed ideal, so it works for any hardware. 100 %
+means "as good as this room gets"; a sustained drop is the signal that something changed. It reads
+"learning" until it has a baseline, and stays neutral rather than accusing new equipment.
 
 It stays honest about all of it. Samples taken with a window open, a mode change mid-interval, a
 restart gap, or a sensor glitch are discarded; coefficients are clamped to physically possible
@@ -187,7 +228,7 @@ sensors.
 **It stopped during a storm.** That is the lightning hold. Any strike inside the reaction radius
 stops the compressor, and closer or busier storms hold longer.
 
-**A portable AC will not cool.** It needs a vent signal — the exhaust vent contact, or the
+**A portable AC will not cool.** It needs a vent signal: the exhaust vent contact, or the
 **Exhaust Vented** switch. This is deliberate: an unvented portable unit dumps its condenser heat
 back into the room, so the engine refuses to cool or dry until venting is confirmed. Flip the
 switch on only when the hose is actually out the window.
@@ -197,8 +238,17 @@ switch on only when the hose is actually out the window.
 **It is cooling less than expected.** Check quiet hours, and whether the room is genuinely above
 your target. The **Decision** sensor states its reasoning in plain language.
 
+**The fan and the purifier start together.** They should not: the fan answers heat and damp, the
+purifier answers air quality, and neither reads the other's signal. If they move together, check
+**Invalid Entities** for an entity listed "in both" slots. A fan and a purifier both live in Home
+Assistant's `fan` domain, so it is easy to put the purifier in the fan slot. Give each device its
+own slot. Until you do, the purifier slot wins and the fan channel leaves that entity alone.
+
+**A device was offline when the engine decided.** Its command is kept and sent once the device is
+available again. **Apply Decision** re-sends everything immediately.
+
 **Something looks wrong and you want to report it.** Download diagnostics from the integration's
-device page — it includes the learned model, which is the only state that cannot be reconstructed
+device page. It includes the learned model, which is the only state that cannot be reconstructed
 from your config.
 
 ## Contributing
